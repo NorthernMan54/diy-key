@@ -10,6 +10,17 @@ Protect names. Like the AI Key's text encoder, short queries get "a photo of ".
 
 Off unless DIYKEY_CLIP=1 (torch + open_clip_torch installed; ~1.7 GB of weights
 on first use). Loaded once, used from several threads under a lock.
+
+DIYKEY_CLIP_FP16=1 (opt-in, MPS/CUDA only; CPU stays FP32) runs CLIP in FP16 from an FP16 copy
+of the same weights (DIYKEY_CLIP_FP16_WEIGHTS, default ~/.diy-key/models/<FP16_FILE>; written
+once from the FP32 checkpoint when missing, restart afterwards to drop that copy's memory). The
+model is built on the meta device and the FP16 tensors land straight on the GPU, so no FP32 copy
+stays in the process: plain .half() after an FP32 load saved nothing (+2.4 GB either way, the
+allocator keeps the FP32 pages). Saul (M1 Pro) 2026-11-10, after 16 frames: +1,088 MB vs +2,832 MB
+FP32 (wasaga logged +3,077 MB); 44 Driveway crops x 15 queries moved cosine by <= 0.0009, i.e. <= 0.28
+points of Protect's (cos-0.08)/0.32 similarity, no result crossed 50 %, every top-3 the same.
+FP32-stored image vectors still match FP16 queries (<= 0.04 points), so no re-index is needed.
+docs/memory-speed-2026-11.md.
 """
 import logging
 import os
@@ -26,8 +37,60 @@ _lock = threading.Lock()
 _model = None
 
 
+OPEN_CLIP_NAME = "ViT-L-14-quickgelu"
+FP16_FILE = "clip-ViT-L-14-quickgelu-openai-fp16.safetensors"
+
+
 def enabled():
     return os.environ.get("DIYKEY_CLIP", "0") == "1"
+
+
+def fp16_wanted(device):
+    """DIYKEY_CLIP_FP16=1 on a GPU device. CPU FP16 is slow and partly unsupported, so a CPU
+    host keeps FP32 whatever the setting."""
+    return os.environ.get("DIYKEY_CLIP_FP16", "0") == "1" and device in ("mps", "cuda")
+
+
+def fp16_weights_path():
+    return os.path.expanduser(os.environ.get("DIYKEY_CLIP_FP16_WEIGHTS")
+                              or os.path.join("~/.diy-key/models", FP16_FILE))
+
+
+def _write_fp16_weights(open_clip, path):
+    """One-time: the OpenAI FP32 checkpoint as FP16 safetensors (atomic rename)."""
+    from safetensors.torch import save_file
+    model, _, _ = open_clip.create_model_and_transforms(OPEN_CLIP_NAME, pretrained="openai",
+                                                        device="cpu")
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    tmp = path + ".tmp"
+    save_file({k: v.half().contiguous() for k, v in model.state_dict().items()}, tmp)
+    os.replace(tmp, path)
+    log.info("CLIP: wrote FP16 weights %s; restart to free the FP32 load's memory", path)
+
+
+def _load_fp16(open_clip, torch, device):
+    """(model, preprocess) in FP16 with no FP32 copy left on the device."""
+    from safetensors.torch import load_file
+    path = fp16_weights_path()
+    if not os.path.isfile(path):
+        _write_fp16_weights(open_clip, path)
+    with torch.device("meta"):
+        model = open_clip.create_model(OPEN_CLIP_NAME, pretrained=None, device="meta")
+    model = model.to_empty(device=device)
+    model.load_state_dict(load_file(path, device=device), assign=True)
+    # attn_mask is a non-persistent buffer (not in the weights): rebuild the causal mask.
+    n = model.attn_mask.shape[0]
+    model.attn_mask = torch.full((n, n), float("-inf"), device=device).triu_(1)
+    if device == "mps":
+        # load_file(device="mps") leaves ~2 GB of staging buffers in the MPS driver; the first
+        # image made them resident (+845 -> +2,085 MB on Saul) unless they are released here.
+        torch.mps.empty_cache()
+    cfg = open_clip.get_pretrained_cfg(OPEN_CLIP_NAME, "openai")
+    preprocess = open_clip.image_transform(
+        model.visual.image_size, is_train=False, mean=cfg["mean"], std=cfg["std"],
+        interpolation=cfg.get("interpolation", "bicubic"),
+        resize_mode=cfg.get("resize_mode", "shortest"))
+    return model, preprocess
 
 
 def _load():
@@ -39,11 +102,16 @@ def _load():
                 import open_clip
                 import torch
                 device = "mps" if torch.backends.mps.is_available() else "cpu"
-                model, _, preprocess = open_clip.create_model_and_transforms(
-                    "ViT-L-14-quickgelu", pretrained="openai", device=device)
+                fp16 = fp16_wanted(device)
+                if fp16:
+                    model, preprocess = _load_fp16(open_clip, torch, device)
+                else:
+                    model, _, preprocess = open_clip.create_model_and_transforms(
+                        OPEN_CLIP_NAME, pretrained="openai", device=device)
                 model.eval()
-                _model = (model, preprocess, open_clip.get_tokenizer("ViT-L-14-quickgelu"), device)
-                log.info("CLIP ViT-L-14 (openai) loaded on %s", device)
+                _model = (model, preprocess, open_clip.get_tokenizer(OPEN_CLIP_NAME), device)
+                log.info("CLIP ViT-L-14 (openai) loaded on %s (%s)", device,
+                         "fp16" if fp16 else "fp32")
             except Exception as e:  # noqa: BLE001 -- search just stays without embeddings
                 log.warning("CLIP unavailable: %r", e)
                 _model = False
@@ -68,7 +136,8 @@ def image_embed(img_bgr):
     from PIL import Image
     pil = Image.fromarray(cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB))
     with _lock, torch.no_grad():
-        feats = model.encode_image(preprocess(pil).unsqueeze(0).to(device))
+        x = preprocess(pil).unsqueeze(0)
+        feats = model.encode_image(x.to(device, next(model.parameters()).dtype))
     return _unit(feats.float().cpu().numpy())
 
 

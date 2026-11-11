@@ -31,8 +31,18 @@ black border the GAN would "restore") -> resize to 512 -> run -> resize back to
 the padded size -> crop the pad -> encode JPEG q=95. Protect's face crops are
 small and rarely square, hence the pad rather than a stretch.
 
-onnxruntime tries CoreMLExecutionProvider (Apple Silicon) then CPU. The session
-loads lazily on first use and is shared by threads under a lock (ucp4 tasks run
+onnxruntime tries CoreMLExecutionProvider (Apple Silicon) then CPU, as
+DIYKEY_FACE_ENHANCE_PROVIDER picks: "coreml" (default, CoreML's default
+NeuralNetwork format), "mlprogram" (CoreML MLProgram, cached compile next to the
+model) or "cpu". Measured on Saul (M1 Pro, 16 GB) 2026-11-10, five Driveway/doorbell
+face crops: the default format splits GFPGAN into 29 CoreML partitions (492 of 557
+nodes), loads in 6.7 s, ends +3,568 MB and runs 1.25 s per face; MLProgram takes all
+557 nodes in one partition, loads in 1.0 s from its cache (2.6 s cold), ends
++779-1,239 MB and runs 0.48 s; CPU ends +1,300 MB at 1.33 s. MLProgram output
+matched CPU to within 1 grey level (PSNR > 90 dB), the default format to 0.06 mean
+(FP16), none visible. On wasaga (Flynn) the default format added +5,284 MB at
+warm-up, MLProgram +757 MB in a standalone test. docs/memory-speed-2026-11.md.
+The session loads lazily on first use and is shared by threads under a lock (ucp4 tasks run
 concurrently; an InferenceSession run is not something we want to interleave
 with a half-finished load).
 """
@@ -48,6 +58,8 @@ log = logging.getLogger("diykey.face_enhance")
 SIZE = 512
 JPEG_QUALITY = 95
 ENV_MODEL = "DIYKEY_FACE_ENHANCE_MODEL"
+ENV_PROVIDER = "DIYKEY_FACE_ENHANCE_PROVIDER"
+PROVIDER_CHOICES = ("coreml", "mlprogram", "cpu")
 
 _lock = threading.Lock()
 _session = None
@@ -74,6 +86,26 @@ def _model_key():
         return (path, None)
 
 
+def _providers(path, avail):
+    """onnxruntime providers for DIYKEY_FACE_ENHANCE_PROVIDER (see the module docstring), or
+    None for onnxruntime's own default. An unknown value warns once and means "coreml"."""
+    choice = os.environ.get(ENV_PROVIDER, "coreml").strip().lower() or "coreml"
+    if choice not in PROVIDER_CHOICES:
+        _warn_once("provider", "face enhance: %s=%r unknown (want %s); using coreml",
+                   ENV_PROVIDER, choice, "/".join(PROVIDER_CHOICES))
+        choice = "coreml"
+    coreml = "CoreMLExecutionProvider" in avail and choice != "cpu"
+    if coreml and choice == "mlprogram":
+        return [("CoreMLExecutionProvider", {
+            "ModelFormat": "MLProgram", "MLComputeUnits": "ALL",
+            "ModelCacheDirectory": os.path.join(os.path.dirname(os.path.abspath(path)),
+                                                ".coreml_cache")}),
+                "CPUExecutionProvider"]
+    providers = [p for p in ("CoreMLExecutionProvider", "CPUExecutionProvider")
+                 if p in avail and (coreml or p != "CoreMLExecutionProvider")]
+    return providers or None
+
+
 def _load_session():
     """Lazy ONNX load; caller holds _lock. Returns None when no usable model.
     A failed load is retried only when the model path or its mtime changes, so
@@ -94,10 +126,8 @@ def _load_session():
         return None
     try:
         import onnxruntime as ort
-        avail = ort.get_available_providers()
-        providers = [p for p in ("CoreMLExecutionProvider", "CPUExecutionProvider")
-                     if p in avail] or None
-        _session = ort.InferenceSession(path, providers=providers)
+        _session = ort.InferenceSession(path, providers=_providers(
+            path, ort.get_available_providers()))
         log.info("face enhance: loaded %s (%s)", path, _session.get_providers())
     except Exception as e:  # noqa: BLE001 - any load failure means pass-through
         _warn_once("load", "face enhance: load %s failed: %s", path, e)

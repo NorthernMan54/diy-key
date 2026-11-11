@@ -126,5 +126,61 @@ class FaceEnhanceTest(unittest.TestCase):
                 self.assertIsNotNone(fe._session)
 
 
+class ProviderChoiceTest(unittest.TestCase):
+    """DIYKEY_FACE_ENHANCE_PROVIDER: Saul 2026-11-10, MLProgram ran GFPGAN as one CoreML
+    partition at +779-1,239 MB vs the default format's +3,568 MB, same pixels as CPU."""
+    BOTH = ["CoreMLExecutionProvider", "CPUExecutionProvider"]
+
+    def setUp(self):
+        _reset()
+
+    def tearDown(self):
+        _reset()
+
+    def _provs(self, value, avail=None):
+        env = {} if value is None else {fe.ENV_PROVIDER: value}
+        with mock.patch.dict(os.environ, env):
+            if value is None:
+                os.environ.pop(fe.ENV_PROVIDER, None)
+            return fe._providers("/m/gfpgan_1.4.onnx", avail or self.BOTH)
+
+    def test_default_is_unchanged_coreml_then_cpu(self):
+        self.assertEqual(self._provs(None), self.BOTH)
+        self.assertEqual(self._provs("coreml"), self.BOTH)
+        self.assertEqual(self._provs(""), self.BOTH)
+
+    def test_mlprogram_options_and_cache_next_to_model(self):
+        provs = self._provs("MLProgram")
+        name, opts = provs[0]
+        self.assertEqual(name, "CoreMLExecutionProvider")
+        self.assertEqual(opts["ModelFormat"], "MLProgram")
+        self.assertEqual(opts["ModelCacheDirectory"], "/m/.coreml_cache")
+        self.assertEqual(provs[1:], ["CPUExecutionProvider"])
+
+    def test_cpu_leaves_coreml_out(self):
+        self.assertEqual(self._provs("cpu"), ["CPUExecutionProvider"])
+
+    def test_no_coreml_available_means_cpu_even_for_mlprogram(self):
+        self.assertEqual(self._provs("mlprogram", ["CPUExecutionProvider"]),
+                         ["CPUExecutionProvider"])
+
+    def test_unknown_value_warns_once_and_uses_coreml(self):
+        self.assertEqual(self._provs("ane"), self.BOTH)
+        self.assertIn("provider", fe._logged)
+
+    def test_load_passes_the_choice_to_onnxruntime(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "gfpgan.onnx")
+            open(path, "wb").close()
+            with mock.patch.dict(os.environ, {fe.ENV_MODEL: path, fe.ENV_PROVIDER: "mlprogram"}), \
+                    mock.patch("onnxruntime.get_available_providers", return_value=self.BOTH), \
+                    mock.patch("onnxruntime.InferenceSession",
+                               return_value=FakeSession()) as ctor:
+                fe.enhance(_jpeg(64, 64))
+            provs = ctor.call_args.kwargs["providers"]
+            self.assertEqual(provs[0][1]["ModelFormat"], "MLProgram")
+            self.assertEqual(provs[0][1]["ModelCacheDirectory"], os.path.join(d, ".coreml_cache"))
+
+
 if __name__ == "__main__":
     unittest.main()

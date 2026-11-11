@@ -14,6 +14,16 @@ Open items for the macOS / Protect 7.3.70 work. Newest first within each section
 
 ## Investigate
 
+- **Memory on 16 GB Macs** (wasaga swapping, 2026-11-10): measurements and recommendations are in
+  [docs/memory-speed-2026-11.md](docs/memory-speed-2026-11.md). To try on wasaga:
+  - `DIYKEY_FACE_ENHANCE_PROVIDER=mlprogram`: about 2.3-4.5 GB less, same pixels;
+  - `DIYKEY_CLIP_FP16=1`: about 1.7 GB less, ≤0.3 similarity points;
+  - `DIYKEY_VLM_MODEL=mlx-community/InternVL3_5-1B-4bit`: about 3.5 GB less, 3.6× faster.
+
+  Open:
+  - RAM++ MLProgram takes 6.5-7 min to compile on every start, even with ORT's cache;
+  - the `transformers` VLM backend is broken on transformers 5.x (`all_tied_weights_keys`, no `einops`).
+
 - Second-stage verification vs firmware (ui-infer-gateway second_verifier.py, 2.2.8):
   - No frame: live 2026-11-08 13:48, extraction failed ("no frame ... @4.750s", start == end,
     seek past the clip). Keeping the claimed type is right, as the firmware does; use its status
