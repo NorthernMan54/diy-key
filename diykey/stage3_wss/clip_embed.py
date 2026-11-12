@@ -16,8 +16,8 @@ of the same weights (DIYKEY_CLIP_FP16_WEIGHTS, default ~/.diy-key/models/<FP16_F
 once from the FP32 checkpoint when missing, restart afterwards to drop that copy's memory). The
 model is built on the meta device and the FP16 tensors land straight on the GPU, so no FP32 copy
 stays in the process: plain .half() after an FP32 load saved nothing (+2.4 GB either way, the
-allocator keeps the FP32 pages). Saul (M1 Pro) 2026-11-10, after 16 frames: +1,088 MB vs +2,832 MB
-FP32 (wasaga logged +3,077 MB); 44 Driveway crops x 15 queries moved cosine by <= 0.0009, i.e. <= 0.28
+allocator keeps the FP32 pages). Mac B (M1 Pro) 2026-11-10, after 16 frames: +1,088 MB vs +2,832 MB
+FP32 (Mac A logged +3,077 MB); 44 Driveway crops x 15 queries moved cosine by <= 0.0009, i.e. <= 0.28
 points of Protect's (cos-0.08)/0.32 similarity, no result crossed 50 %, every top-3 the same.
 FP32-stored image vectors still match FP16 queries (<= 0.04 points), so no re-index is needed.
 docs/memory-speed-2026-11.md.
@@ -83,7 +83,7 @@ def _load_fp16(open_clip, torch, device):
     model.attn_mask = torch.full((n, n), float("-inf"), device=device).triu_(1)
     if device == "mps":
         # load_file(device="mps") leaves ~2 GB of staging buffers in the MPS driver; the first
-        # image made them resident (+845 -> +2,085 MB on Saul) unless they are released here.
+        # image made them resident (+845 -> +2,085 MB on Mac B) unless they are released here.
         torch.mps.empty_cache()
     cfg = open_clip.get_pretrained_cfg(OPEN_CLIP_NAME, "openai")
     preprocess = open_clip.image_transform(

@@ -110,7 +110,7 @@ def _feature_flags(env=None):
         "supportPoseEstimation": _feature(True),
         # Gates the Person class in Second Stage Verification: Protect builds the NVR's in-memory
         # aiFeatureFlag.supportPersonReId from adopted AI Keys' getInfo (live 2026-10-29 on
-        # Saul: Person unselectable until advertised, then a browser reload). Live 2026-11-07
+        # Mac B: Person unselectable until advertised, then a browser reload). Live 2026-11-07
         # (Protect 7.3.74): turning it off hid Person again. No ReID model is needed for SSV
         # itself; DIYKEY_PERSON_REID=0 turns it off.
         "supportPersonReId": _feature((env.get("DIYKEY_PERSON_REID") or "1").strip().lower()
@@ -1020,7 +1020,7 @@ _tagger_warned = False
 
 def _footprint_mb():
     """This process's memory in MB as Activity Monitor counts it (macOS phys_footprint, which
-    includes compressed and swapped pages), or None. Live 2026-11-10 15:57: wasaga's main
+    includes compressed and swapped pages), or None. Live 2026-11-10 15:57: Mac A's main
     process was 13 GB footprint but 2 MB RSS on a swapping 16 GB Mac, so RSS hides it."""
     try:
         if sys.platform == "darwin":

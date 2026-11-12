@@ -34,13 +34,13 @@ small and rarely square, hence the pad rather than a stretch.
 onnxruntime tries CoreMLExecutionProvider (Apple Silicon) then CPU, as
 DIYKEY_FACE_ENHANCE_PROVIDER picks: "coreml" (default, CoreML's default
 NeuralNetwork format), "mlprogram" (CoreML MLProgram, cached compile next to the
-model) or "cpu". Measured on Saul (M1 Pro, 16 GB) 2026-11-10, five Driveway/doorbell
+model) or "cpu". Measured on Mac B (M1 Pro, 16 GB) 2026-11-10, five Driveway/doorbell
 face crops: the default format splits GFPGAN into 29 CoreML partitions (492 of 557
 nodes), loads in 6.7 s, ends +3,568 MB and runs 1.25 s per face; MLProgram takes all
 557 nodes in one partition, loads in 1.0 s from its cache (2.6 s cold), ends
 +779-1,239 MB and runs 0.48 s; CPU ends +1,300 MB at 1.33 s. MLProgram output
 matched CPU to within 1 grey level (PSNR > 90 dB), the default format to 0.06 mean
-(FP16), none visible. On wasaga (Flynn) the default format added +5,284 MB at
+(FP16), none visible. On Mac A the default format added +5,284 MB at
 warm-up, MLProgram +757 MB in a standalone test. docs/memory-speed-2026-11.md.
 The session loads lazily on first use and is shared by threads under a lock (ucp4 tasks run
 concurrently; an InferenceSession run is not something we want to interleave

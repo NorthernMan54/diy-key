@@ -1,14 +1,14 @@
-# Memory and speed: wasaga's five questions (2026-11-10)
+# Memory and speed: Mac A's five questions (2026-11-10)
 
-Flynn's live instance "wasaga" (16 GB Mac) was swapping. After warm-up its main process held
+The live instance on Mac A (16 GB Mac) was swapping. After warm-up its main process held
 about 13.1 GB, and between 13:00 and 15:30 the task queue waited up to 899 s and dropped 22 jobs.
 The warm-up log (commit `81b251c`) added, per model: CLIP ViT-L-14-quickgelu FP32 on torch/MPS
 +3,077 MB, SmolVLM2-2.2B MLX +4,268 MB, GFPGAN 1.4 on onnxruntime CoreML +5,284 MB, and RAM++
 on CoreML +303 MB. The AI Key firmware runs on a 16 GB Jetson Orin NX, with InternVL2.5-1B in
 BF16 at about 1.9 GB.
 
-Everything below was measured on Saul (MacBook Pro, M1 Pro, 16 GB) with the `ai-gaps` venv:
-onnxruntime 1.31.1, torch 2.15.0, transformers 5.22.2, mlx_vlm 0.7.12. The saul instance was
+Everything below was measured on Mac B (MacBook Pro, M1 Pro, 16 GB) with the `ai-gaps` venv:
+onnxruntime 1.31.1, torch 2.15.0, transformers 5.22.2, mlx_vlm 0.7.12. The Mac B instance was
 stopped. Each configuration ran in a fresh process. Memory is the change in macOS
 `phys_footprint` (`_footprint_mb`, as at warm-up): "load" is right after the session or model
 loads, "end" is after every run. Times are wall seconds, and "warm" is the median after the
@@ -35,10 +35,10 @@ FP32, so it matches CPU almost bit for bit. The default format runs FP16 and dif
 0.1 grey level. The default format's memory and slowness come from its 29 partitions with
 CPU islands between them.
 
-**Recommendation:** set `DIYKEY_FACE_ENHANCE_PROVIDER=mlprogram` on wasaga. The new toggle is
+**Recommendation:** set `DIYKEY_FACE_ENHANCE_PROVIDER=mlprogram` on Mac A. The new toggle is
 in `face_enhance.py`; the default is unchanged. Expect about 2.3-2.8 GB less than the default
-format here. Flynn's standalone test showed +757 MB against +4,129 MB, and the same output
-quality. Make it the default after it has run a day on wasaga.
+format here. Mac A's standalone test showed +757 MB against +4,129 MB, and the same output
+quality. Make it the default after it has run a day on Mac A.
 
 ## 2. RAM++: does MLProgram gain the same way?
 
@@ -59,7 +59,7 @@ whose model CoreML had already compiled.
 Findings:
 - MLProgram already gives the gain: 1.6 GB less than CPU, about 6 GB less than the default
   format, and 3-5× faster, with the same tags.
-- wasaga's "+303 MB" undercounts RAM++. Here it ends at about +2.0 GB. Part of the 13.1 GB is
+- Mac A's "+303 MB" undercounts RAM++. Here it ends at about +2.0 GB. Part of the 13.1 GB is
   probably RAM++ charged to whichever model warmed up next, since CoreML compiles and maps
   lazily.
 - The real cost is load time. Even with ORT's `ModelCacheDirectory` warm, the session took
@@ -106,7 +106,7 @@ Brand-text probe (c3 red CR-V + trailer / c4 grey car + trailer / c8 red CR-V + 
 Findings:
 - Quantising SmolVLM2-2.2B to 4 bits saves 2.2 GB but no time on this M1 Pro. The summaries
   keep their quality, but it stopped reading text at all: 0 of 3, against 1 of 3 for BF16.
-- The 1B-class models are 3.5-4.5× faster. Speed matters as much as memory for wasaga's queue.
+- The 1B-class models are 3.5-4.5× faster. Speed matters as much as memory for Mac A's queue.
 - InternVL2.5-1B degrades badly at 4-bit MLX. The firmware avoids that by running it unquantised.
 - InternVL3.5-1B at 4 bits is the best trade: 3.5 GB less than today, 3.6× faster, and summaries
   close to SmolVLM2-2.2B's, a little wordier and with one invented object in 8.
@@ -120,7 +120,7 @@ Findings:
   CPU and then move to MPS, the same trap as CLIP's `.half()`.
 
 **Recommendation:** try `DIYKEY_VLM_MODEL=mlx-community/InternVL3_5-1B-4bit` with
-`DIYKEY_VLM=mlx` on saul, then wasaga. The mlx backend loads it as is, with no code change.
+`DIYKEY_VLM=mlx` on Mac B, then Mac A. The mlx backend loads it as is, with no code change.
 Expect about 3.5 GB less and about 3 s less per summary. If its occasional invented objects
 show up in Protect, fall back to a local 4-bit SmolVLM2-2.2B, which saves 2.2 GB at today's
 speed and quality but doesn't read text. Don't use SmolVLM2-500M or InternVL2.5-1B 4-bit.
@@ -167,7 +167,7 @@ with FP16 queries, so nothing needs re-indexing. The saving only comes from load
 weights directly, which is what the new opt-in `DIYKEY_CLIP_FP16=1` does. On the first start
 it writes `~/.diy-key/models/clip-ViT-L-14-quickgelu-openai-fp16.safetensors` (855 MB) from
 the OpenAI checkpoint; after that, a restart loads only FP16. CPU hosts stay FP32. Expect
-about 1.6-1.9 GB less than today, or about 2.2 GB against wasaga's logged +3,077 MB.
+about 1.6-1.9 GB less than today, or about 2.2 GB against Mac A's logged +3,077 MB.
 
 ## 5. Firmware engine files and the VLM settings
 
@@ -199,7 +199,7 @@ any OTA:
 FP16 and about half the size of ours, and that its VLM runs unquantised BF16. That supports FP16
 (question 4) and, for the VLM, a smaller model rather than heavier quantisation of the 2.2B.
 
-## Summary for wasaga
+## Summary for Mac A
 
 | Change | Expected saving | Risk |
 |---|---|---|

@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""clip_embed: DIYKEY_CLIP_FP16 is opt-in and GPU-only (Saul 2026-11-10: FP16 moved Protect's
+"""clip_embed: DIYKEY_CLIP_FP16 is opt-in and GPU-only (Mac B 2026-11-10: FP16 moved Protect's
 similarity by <= 0.28 points on 44 Driveway crops x 15 queries, +889 MB vs +2.5 GB FP32), and
 Protect's similarity mapping."""
 import os

@@ -326,7 +326,7 @@ class ClaimedTypeTest(unittest.TestCase):
 
 
 class SpeciesTest(unittest.TestCase):
-    """Live 2026-11-09 18:27:07 Wasaga Doorbell: summary "A cat walking through a gate", whole
+    """Live 2026-11-09 18:27:07 Doorbell: summary "A cat walking through a gate", whole
     frame cat 0.90 / dog 0.95, but the object went out animal/night/bear 0.62, so a search for
     "cat" found nothing."""
     NAMES = ["cat", "dog", "bird", "fence", "man"]

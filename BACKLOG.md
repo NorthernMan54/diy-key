@@ -14,8 +14,8 @@ Open items for the macOS / Protect 7.3.70 work. Newest first within each section
 
 ## Investigate
 
-- **Memory on 16 GB Macs** (wasaga swapping, 2026-11-10): measurements and recommendations are in
-  [docs/memory-speed-2026-11.md](docs/memory-speed-2026-11.md). To try on wasaga:
+- **Memory on 16 GB Macs** (Mac A swapping, 2026-11-10): measurements and recommendations are in
+  [docs/memory-speed-2026-11.md](docs/memory-speed-2026-11.md). To try on Mac A:
   - `DIYKEY_FACE_ENHANCE_PROVIDER=mlprogram`: about 2.3-4.5 GB less, same pixels;
   - `DIYKEY_CLIP_FP16=1`: about 1.7 GB less, ≤0.3 similarity points;
   - `DIYKEY_VLM_MODEL=mlx-community/InternVL3_5-1B-4bit`: about 3.5 GB less, 3.6× faster.

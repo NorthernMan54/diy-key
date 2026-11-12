@@ -127,7 +127,7 @@ class FaceEnhanceTest(unittest.TestCase):
 
 
 class ProviderChoiceTest(unittest.TestCase):
-    """DIYKEY_FACE_ENHANCE_PROVIDER: Saul 2026-11-10, MLProgram ran GFPGAN as one CoreML
+    """DIYKEY_FACE_ENHANCE_PROVIDER: Mac B 2026-11-10, MLProgram ran GFPGAN as one CoreML
     partition at +779-1,239 MB vs the default format's +3,568 MB, same pixels as CPU."""
     BOTH = ["CoreMLExecutionProvider", "CPUExecutionProvider"]
 

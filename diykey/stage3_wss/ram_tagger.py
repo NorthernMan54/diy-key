@@ -106,7 +106,7 @@ KIND_WORDS = {
 
 # Species on an animal crop. plus_filter keeps only words Protect turns into a filter label, which
 # has no species, so a RAM++ "cat" never reached the object row that search queries. Live
-# 2026-11-09 18:27:07 Wasaga Doorbell (event 9be8c45f, tracker 74537): the summary said "A cat
+# 2026-11-09 18:27:07 Doorbell (event 9be8c45f, tracker 74537): the summary said "A cat
 # walking through a gate" and the whole frame was tagged cat 0.90, but the object went out as
 # animal/night/bear 0.62 (COCO's guess), so Find Anything and Spotlight found no cat.
 # A crop's species is kept only when the event's whole-frame tags name it too: on tiny crops
