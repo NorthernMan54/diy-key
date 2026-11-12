@@ -34,7 +34,14 @@ only: no vendor code or binaries in the repo, no console modification.
 | `core/config.py` | Config/identity (`diykey.cfg` + `DIYKEY_*` env), state files, log redaction, firmware version pin |
 | `stage1_discovery/beacon.py` | UBNT discovery UDP/10001 |
 | `stage1_http/adopt_http.py` | HTTPS :8080 (`/api/info` GET+POST, `/api/adopt`) |
-| `stage3_wss/ucp4_client.py` | ucp4 to the console :7442, setup RPCs, AI task dispatch, nl-search loop (893 lines; split planned) |
+| `stage3_wss/ucp4_client.py` | ucp4 to the console :7442, setup RPCs, AI task dispatch, task queue, prefetch, model warm-up, nl-search loop (~2,400 lines; split planned) |
+| `stage3_wss/vlm_describe.py` | One-image VLM summary ("NeXT AI Summary"): mlx or transformers backend |
+| `stage3_wss/scene_memory.py` | Per-camera "always there" scene, so summaries and tags follow what changed |
+| `stage3_wss/face_recog.py` | Face detection + embedding for `recognizeFaces` |
+| `stage3_wss/face_enhance.py` | GFPGAN for Faces-page Enhance (`enhanceImage`); `DIYKEY_FACE_ENHANCE_PROVIDER` |
+| `stage3_wss/lpr.py` | Licence-plate reads for the LPR result |
+| `stage3_wss/reid_model.py` | Person re-ID vectors (OSNet-AIN) |
+| `stage3_wss/system_stats.py` | Hardware stats for the `systemMetrics` RPC |
 | `stage3_wss/clip_fetch.py` | Fetch task clips (as MP4) / images from the console, grab frames |
 | `stage3_wss/ram_tagger.py` | COCO ONNX detector → Protect RAM tags, descriptions, per-object `thumbnailTags` |
 | `stage3_wss/second_verifier.py` | Second Stage Verification (`RequestAI` → `second_verifier_mlabel`) |
