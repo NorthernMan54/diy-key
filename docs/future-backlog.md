@@ -67,6 +67,12 @@ These are built and unit tested, but have not been seen working end to end.
 
 Out of scope for now; this is the plan if it is picked up. Priority P3.
 
+Dependency (2026-11-12): cameras paired to diy-port send no audio events, so Protect never
+asks the AI Key to transcribe them. diy-port's backlog has `alrmSpeak` via EventSmartAudio
+(Olli0103/unifi-protect-local-ai `aiport_audio.py` shows Protect 7.3.60 accepts it from an AI
+Port and then queues the AI Key's `speechToText`). Olli's project also has a working speech
+path to compare against.
+
 How the firmware does it (`syswrapper.sh`, `ui-stt-agent` in AI Key 2.2.8): the camera detects
 speech, Protect sends `speechToText`, the clip is fetched and its start read from the
 `x-timestamp` / `x-start-timestamp` response headers, `ffmpeg` extracts 16 kHz mono WAV, and
