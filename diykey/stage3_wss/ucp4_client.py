@@ -286,7 +286,7 @@ def _nl_search_reply(head, body, device_info):
             reply = nl_search.parse(body.get("querySentence") or "")
             log.info("NL_PARSE %r (model %s) -> tags %s types %s time %s embed %d",
                      body.get("querySentence"), body.get("model"),
-                     [t["matchedWord"] for t in reply["keyTags"]], reply["objectTypes"],
+                     {t["matchedWord"]: t["tags"] for t in reply["keyTags"]}, reply["objectTypes"],
                      reply.get("timeTag"), len(reply["txtEmbed"]))
             return reply
         if action == "IMAGE_SEARCH":
