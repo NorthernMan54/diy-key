@@ -34,7 +34,9 @@ only: no vendor code or binaries in the repo, no console modification.
 | `core/config.py` | Config/identity (`diykey.cfg` + `DIYKEY_*` env), state files, log redaction, firmware version pin |
 | `stage1_discovery/beacon.py` | UBNT discovery UDP/10001 |
 | `stage1_http/adopt_http.py` | HTTPS :8080 (`/api/info` GET+POST, `/api/adopt`) |
-| `stage3_wss/ucp4_client.py` | ucp4 to the console :7442, setup RPCs, AI task dispatch, task queue, prefetch, model warm-up, nl-search loop (~2,400 lines; split planned) |
+| `stage3_wss/ucp4_client.py` | ucp4 to the console :7442, setup RPCs, AI task dispatch, task queue, prefetch, model warm-up, nl-search loop (~2,300 lines; further split planned) |
+| `stage3_wss/ucp4_wire.py` | UCP4 record framing (8-byte header + JSON/raw payload) |
+| `stage3_wss/task_meta.py` | personMeta/vehicleMeta flattening, roiMeta-derived metas, meta wall clock |
 | `stage3_wss/vlm_describe.py` | One-image VLM summary ("NeXT AI Summary"): mlx or transformers backend |
 | `stage3_wss/scene_memory.py` | Per-camera "always there" scene, so summaries and tags follow what changed |
 | `stage3_wss/face_recog.py` | Face detection + embedding for `recognizeFaces` |

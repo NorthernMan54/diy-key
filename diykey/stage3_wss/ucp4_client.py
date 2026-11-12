@@ -56,18 +56,17 @@ import lpr  # noqa: E402
 import face_enhance  # noqa: E402
 import vlm_describe  # noqa: E402
 import scene_memory  # noqa: E402
+from ucp4_wire import (  # noqa: E402,F401 -- re-exported for callers and tests
+    RECORD_FORMAT_JSON, RECORD_FORMAT_RAW, RECORD_TYPE_BODY, RECORD_TYPE_HEAD,
+    pack_message, pack_record, unpack_all_records)
+from task_meta import (  # noqa: E402,F401
+    EPOCH_MS_MIN, _flatten_meta, _meta_start_ms, _meta_wall_ms, _roi_derived_metas)
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 CONSOLE_INTERNAL_API_PORT = 7444
 
 log = logging.getLogger("ucp4-client")
-
-# UCP4 record header (8 bytes): type, format, compressed, reserved, u32 length.
-RECORD_TYPE_HEAD = 1
-RECORD_TYPE_BODY = 2
-RECORD_FORMAT_JSON = 1
-RECORD_FORMAT_RAW = 3
 
 # --state-dir (or None for the historical stage1_http/ path). Resolved in
 # main(); kept as plain paths here so importing this module has no side effects.
@@ -264,45 +263,6 @@ def _apply_pg_password(new_password):
 ADOPT_STATE_FILE = os.path.join(config.DEFAULT_STATE_DIR, "adopt_state.json")
 CERT_PATH = os.path.join(config.DEFAULT_STATE_DIR, "server.crt")
 KEY_PATH = os.path.join(config.DEFAULT_STATE_DIR, "server.key")
-
-
-def pack_record(record_type: int, payload) -> bytes:
-    if isinstance(payload, (bytes, bytearray)):
-        body = bytes(payload)
-        rec_format = RECORD_FORMAT_RAW
-    else:
-        body = json.dumps(payload).encode()
-        rec_format = RECORD_FORMAT_JSON
-    header = struct.pack(">BBBBI", record_type, rec_format, 0, 0, len(body))
-    return header + body
-
-
-def pack_message(head: dict, body) -> bytes:
-    return pack_record(RECORD_TYPE_HEAD, head) + pack_record(RECORD_TYPE_BODY, body)
-
-
-def unpack_all_records(data: bytes):
-    """[(record_type, format, obj)] for every complete record in a frame."""
-    records = []
-    off = 0
-    while off < len(data):
-        if len(data) - off < 8:
-            log.warning("trailing %d bytes, not enough for a record header", len(data) - off)
-            break
-        rtype, rec_format, _compressed, _reserved, length = struct.unpack(
-            ">BBBBI", data[off:off + 8])
-        off += 8
-        payload = data[off:off + length]
-        off += length
-        if rec_format == RECORD_FORMAT_RAW:
-            obj = {"_raw_bytes": payload}
-        else:
-            try:
-                obj = json.loads(payload)
-            except json.JSONDecodeError:
-                obj = {"_raw": payload.decode(errors="replace")}
-        records.append((rtype, rec_format, obj))
-    return records
 
 
 def _console_host(fallback_host_port):
@@ -1316,61 +1276,6 @@ def _run_summary(console_host, mac_nosep, body, frames, scene):
 # fields (keyMeta, thumbnailMeta, personMeta: Protect M/346308:89-100) all share one
 # z.number() with nothing saying which; keyMoments/thumbnailMs are epoch ms (they seek
 # against body.start), so epoch is the expected case and the offset branch a guard.
-EPOCH_MS_MIN = 10 ** 12
-
-
-def _flatten_meta(meta):
-    """personMeta/vehicleMeta entries with one roi each. The schema makes roi one object
-    (Protect M/346308:76-80, 96-97) but Protect's own linkAiKeyFacesToPersons walks a
-    personMeta roi as an array (M/321055:78-90); accept both."""
-    out = []
-    for entry in meta or []:
-        if not isinstance(entry, dict) or entry.get("ts") is None:
-            continue
-        roi = entry.get("roi")
-        if isinstance(roi, list):
-            out.extend({**entry, "roi": r} for r in roi if isinstance(r, dict))
-        elif isinstance(roi, dict):
-            out.append(entry)
-    return out
-
-
-_ROI_PERSON = ("person",)
-_ROI_VEHICLE = ("vehicle", "car", "truck", "bus", "motorcycle")
-
-
-def _roi_derived_metas(body):
-    """{"person": [...], "vehicle": [...]} personMeta/vehicleMeta-shaped entries built from
-    roiMeta, only for ramType 'videoWithRecognition' and only for the kinds the body lacks.
-
-    Live 21:04 2026-11-07, Protect 7.3.74 (doorbell camera under "Legacy Camera
-    Enhancement"): videoWithRecognition carries only roiMeta (and thumbnailMeta), no
-    personMeta/vehicleMeta/faceMeta, each roi {name, coord, trackerID, trackerId,
-    attributes: {objectType}|None, confidence, objectType}. An explicit personMeta/
-    vehicleMeta always wins; the AI-setting gates stay in _wanted_metas."""
-    if body.get("ramType") != "videoWithRecognition":
-        return {}
-    out = {}
-    for kind, key, types in (("person", "personMeta", _ROI_PERSON),
-                             ("vehicle", "vehicleMeta", _ROI_VEHICLE)):
-        if body.get(key):
-            continue
-        found = []
-        for e in _flatten_meta(body.get("roiMeta")):
-            r = e["roi"]
-            otype = r.get("objectType") or (r.get("attributes") or {}).get("objectType")
-            if otype in types and r.get("coord") is not None:
-                tid = r.get("trackerId", r.get("trackerID"))
-                found.append({"ts": e["ts"], "roi": {"coord": r["coord"], "objectType": otype,
-                                                     "trackerId": tid}})
-        if found:
-            out[kind] = found
-    if out:
-        log.info("event %s: derived %d person / %d vehicle rois from roiMeta",
-                 body.get("event"), len(out.get("person", ())), len(out.get("vehicle", ())))
-    return out
-
-
 def _wanted_metas(body):
     """{"face": personMeta, "lpr": vehicleMeta} for the features this task should run.
 
@@ -1405,19 +1310,6 @@ def _wanted_metas(body):
         if vehicle:
             metas["lpr"] = vehicle
     return metas
-
-
-def _meta_start_ms(metas, start):
-    """start_ms for face_recog/lpr: None when the meta ts are epoch ms, so their
-    clockBestWall is the ts itself, the same epoch ms RAM sends as keyMomentMs; the clip
-    start when they look like offsets (then wall = start + ts). Unverified live which one
-    Protect sends; decided per event so a snapshot's wall never mixes the two."""
-    ts = [float(e["ts"]) for entries in metas.values() for e in entries]
-    return None if not ts or min(ts) >= EPOCH_MS_MIN else int(start)
-
-
-def _meta_wall_ms(ts, meta_start):
-    return int(float(ts)) + (meta_start or 0)
 
 
 def _add_face_lpr(parts, images, metas, frames, meta_start, camera_id, event_id,
