@@ -216,3 +216,51 @@ class TestAdvancedAlarmGaps(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestCanonicalWords(_VocabCase):
+    """Plural fallback and the firmware word linker (DIYKEY_WORD_LINKER)."""
+
+    def setUp(self):
+        super().setUp()
+        nl_search._linker = None
+        self.vocab = {"box", "tree", "puppy", "leaf", "truck", "jeep", "person", "car", "bus"}
+
+    def tearDown(self):
+        nl_search._linker = None
+        super().tearDown()
+
+    def test_regular_plurals(self):
+        c = nl_search._canonical
+        self.assertEqual(c("boxes", self.vocab), "box")
+        self.assertEqual(c("trees", self.vocab), "tree")
+        self.assertEqual(c("puppies", self.vocab), "puppy")
+        self.assertEqual(c("leaves", self.vocab), "leaf")
+
+    def test_aliases_and_vocab_words_win(self):
+        self.assertEqual(nl_search._canonical("people", self.vocab), "person")
+        self.assertEqual(nl_search._canonical("bus", self.vocab), "bus")  # not "bu"
+
+    def test_unknown_word_unchanged(self):
+        self.assertEqual(nl_search._canonical("rogers", self.vocab), "rogers")
+
+    def test_word_linker_strong_links_only(self):
+        with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as f:
+            f.write('{"lorry": {"truck": 1.0}, "wagon": {"jeep": 0.4},'
+                    ' "auto": {"car": 0.8, "jeep": 0.9}}')
+        self.addCleanup(os.unlink, f.name)
+        with mock.patch.dict(os.environ, {"DIYKEY_WORD_LINKER": f.name}):
+            nl_search._linker = None
+            self.assertEqual(nl_search._canonical("lorry", self.vocab), "truck")
+            self.assertEqual(nl_search._canonical("wagon", self.vocab), "wagon")  # 0.4 < 0.8
+            self.assertEqual(nl_search._canonical("auto", self.vocab), "jeep")  # strongest
+
+    def test_missing_linker_is_empty(self):
+        with mock.patch.dict(os.environ, {"DIYKEY_WORD_LINKER": "/nonexistent/linker.json"}):
+            nl_search._linker = None
+            self.assertEqual(nl_search.word_linker(), {})
+
+    def test_parse_tags_a_plural(self):
+        nl_search._vocab = set(nl_search.FALLBACK_VOCAB) | {"tree"}
+        tags = [t for k in nl_search.parse("trees")["keyTags"] for t in k["tags"]]
+        self.assertIn("tree", tags)

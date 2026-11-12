@@ -17,6 +17,7 @@ otherwise).
 Embeddings are clip_embed's CLIP ViT-L/14, the space DIY-Key stores images in.
 """
 import datetime
+import json
 import logging
 import os
 import re
@@ -107,6 +108,57 @@ def vocabulary():
     return _vocab
 
 
+# Firmware 2.2.8 maps query words to RAM tags with ui-slm-runtime-engine's
+# ui_slm_word_linker.json ({word: {tag: weight}}, 35,184 words; e.g. "pickup" {truck: 0.8,
+# jeep: 0.4}, "12 a.m." {midnight: 1.0}). It is vendor data, so it stays outside the repo:
+# DIYKEY_WORD_LINKER names a local copy. Only links at or above LINK_MIN are used, so weak
+# associations ("cars" -> "train interior" 0.1) don't become exact tags.
+LINK_MIN = 0.8
+_linker = None
+
+
+def word_linker():
+    """{word: {tag: weight}} from DIYKEY_WORD_LINKER, or {} when unset or unreadable."""
+    global _linker
+    if _linker is None:
+        _linker = {}
+        path = os.path.expanduser(os.environ.get("DIYKEY_WORD_LINKER") or "")
+        if path:
+            try:
+                with open(path, encoding="utf-8") as f:
+                    data = json.load(f)
+                _linker = {str(k).strip().lower(): v for k, v in data.items()
+                           if isinstance(v, dict)}
+                log.info("nl-search word linker: %d words from %s", len(_linker), path)
+            except (OSError, ValueError, AttributeError) as e:
+                log.warning("nl-search word linker %s unreadable: %r", path, e)
+    return _linker
+
+
+_PLURAL_ENDINGS = (("ies", "y"), ("ves", "f"), ("es", ""), ("s", ""))
+
+
+def _canonical(word, vocab):
+    """The vocabulary tag for one query word: a hand alias, the word itself, a regular
+    singular ("boxes" -> "box", "trees" -> "tree", "puppies" -> "puppy"), then the firmware
+    word linker's strongest link. Falls back to the word unchanged."""
+    if word in ALIASES:
+        return ALIASES[word]
+    if word in vocab:
+        return word
+    for cut, add in _PLURAL_ENDINGS:
+        if word.endswith(cut) and len(word) > len(cut) + 2:
+            single = word[:-len(cut)] + add
+            if single in vocab:
+                return single
+    links = word_linker().get(word) or {}
+    best = max(((w, t) for t, w in links.items()
+                if isinstance(w, (int, float)) and t in vocab), default=None)
+    if best and best[0] >= LINK_MIN:
+        return best[1]
+    return word
+
+
 def _object_type(word):
     for t, ws in OBJECT_WORDS.items():
         if word in ws or ALIASES.get(word, word) in ws:
@@ -163,7 +215,7 @@ def parse(query, now=None):
     for size in (3, 2, 1):  # longest vocabulary phrase first ("police car" over "car")
         for i in range(len(words) - size + 1):
             gram = " ".join(words[i:i + size])
-            tag = ALIASES.get(gram, gram) if size == 1 else gram
+            tag = _canonical(gram, vocab) if size == 1 else gram
             if gram in seen or (size == 1 and gram in STOP) or tag not in vocab:
                 continue
             if any(f" {gram} " in f" {s} " for s in seen):  # inside a longer match
@@ -173,12 +225,12 @@ def parse(query, now=None):
     object_types = [t for t in OBJECT_WORDS if any(_object_type(w) == t for w in words)]
     bare = retrieval.strip()
     exact = (len(words) == 1 and _object_type(bare) is not None
-             and ALIASES.get(bare, bare) in vocab)
+             and _canonical(bare, vocab) in vocab)
     for w in words:
         t = _object_type(w)
         if t is None:
             continue
-        canon = ALIASES.get(w, w)
+        canon = _canonical(w, vocab)
         want = [canon] if canon in vocab else []
         # Exact mode fires on its one label's confidence (M/718745:18-28): keep "car" from also
         # matching trucks via "vehicle" unless ram_tagger never says "car"-level words for it

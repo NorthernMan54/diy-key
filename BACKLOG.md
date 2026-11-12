@@ -71,9 +71,8 @@ Open items for the macOS / Protect 7.3.70 work. Newest first within each section
 
 ## Build
 
-- `NL_PARSE` synonyms and plurals: `people` gives no tag (not in Protect's vocabulary), so the
-  search goes vector-only. Map words to vocabulary tags (`people` → `person`, `cars` → `car`), as
-  the AI Key's `ui_slm_word_linker.json` does, so they get the exact-tag path.
+- ~~`NL_PARSE` synonyms and plurals~~ done 2026-11-11: hand aliases, a regular-plural fallback and
+  the firmware word linker (`DIYKEY_WORD_LINKER`). Not yet checked live in Find Anything.
 - Session search: Protect also asks `NL_PARSE` for `multilingual-e5-small` (384-d,
   `smartDetectSessionsSearch.descEmbedding`); DIY-Key answers with CLIP, which Protect ignores.
 - Face recognition in `recognizeKeyFrames` (`faceMeta`, 128-d SFace `faceEmbed`; pi-port has
