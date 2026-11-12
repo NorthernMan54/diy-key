@@ -264,3 +264,25 @@ class TestCanonicalWords(_VocabCase):
         nl_search._vocab = set(nl_search.FALLBACK_VOCAB) | {"tree"}
         tags = [t for k in nl_search.parse("trees")["keyTags"] for t in k["tags"]]
         self.assertIn("tree", tags)
+
+
+class TestAnimalObjectType(_VocabCase):
+    """Live 2026-11-12: "raccoons" got tag raccoon but no objectTypes."""
+
+    def test_plural_species_is_an_animal(self):
+        for w in ("raccoons", "coyotes", "wolves", "geese", "rabbit"):
+            self.assertEqual(nl_search._object_type(w), "animal", w)
+
+    def test_tagger_species_are_animal_words(self):
+        self.assertIn("coyote", nl_search.OBJECT_WORDS["animal"])
+
+    def test_parse_raccoons_carries_animal(self):
+        nl_search._vocab = set(nl_search.FALLBACK_VOCAB) | {"raccoon", "animal"}
+        r = nl_search.parse("raccoons")
+        self.assertEqual(r["objectTypes"], ["animal"])
+        tags = [t for k in r["keyTags"] for t in k["tags"]]
+        self.assertIn("raccoon", tags)
+        self.assertIn("animal", tags)
+
+    def test_non_animal_unchanged(self):
+        self.assertIsNone(nl_search._object_type("boxes"))

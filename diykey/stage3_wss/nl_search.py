@@ -38,6 +38,10 @@ OBJECT_WORDS = {
     "animal": {"dog", "dogs", "cat", "cats", "animal", "animals", "deer", "bird", "birds", "fox",
                "raccoon", "bear", "horse", "squirrel"},
 }
+# Every species ram_tagger can put on an animal crop is an animal word for search too, so a
+# query like "raccoons" or "coyote" carries objectTypes ['animal'] and the umbrella tag (live
+# 2026-11-12: "raccoons" parsed to tag raccoon but no object type).
+OBJECT_WORDS["animal"] |= {w for w in ram_tagger.KIND_WORDS["animal"] if " " not in w}
 STOP = {"a", "an", "the", "of", "in", "on", "at", "with", "and", "or", "to", "by", "near",
         "show", "me", "find", "any", "some", "is", "are", "was", "who", "that", "wearing"}
 # Query word -> the RAM tag Protect knows it by. Protect turns keyTags[].tags into ids with
@@ -55,6 +59,7 @@ ALIASES = {
     "buses": "bus", "trailers": "trailer",
     "dogs": "dog", "cats": "cat", "animals": "animal", "birds": "bird", "horses": "horse",
     "squirrels": "squirrel", "foxes": "fox", "bears": "bear",
+    "geese": "goose", "mice": "mouse", "sheep": "sheep",
     "grey": "gray",
 }
 # Without DIYKEY_RAM_TAGS: only names checked against the fixture's enabled=true rows
@@ -160,8 +165,12 @@ def _canonical(word, vocab):
 
 
 def _object_type(word):
+    """person / vehicle / animal for a query word, including regular plurals ("raccoons")."""
+    forms = [word, ALIASES.get(word, word)]
+    forms += [word[:-len(cut)] + add for cut, add in _PLURAL_ENDINGS
+              if word.endswith(cut) and len(word) > len(cut) + 2]
     for t, ws in OBJECT_WORDS.items():
-        if word in ws or ALIASES.get(word, word) in ws:
+        if any(f in ws for f in forms):
             return t
     return None
 
