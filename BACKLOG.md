@@ -89,6 +89,21 @@ Open items for the macOS / Protect 7.3.70 work. Newest first within each section
 
 ## Build
 
+Gaps against a generic AI Key feature list (2026-11-12). That list is not from Protect or the
+firmware: confirm each field and action from Protect's code or a live capture before building.
+
+- **Person attributes** (clothing type/colour, bags, hats, glasses): the firmware has PAR engines
+  (`SmartPAR_lower_enhance.engine`, `SmartMM_*` in ubnt_ai_infer_agent). Find which Protect
+  result fields carry them; we only send RAM++ tags today.
+- **Package context** (person carrying / dropping off a package): only RAM++ `package`/`box` tags
+  now. Check whether Protect has a package event or attribute an AI Key fills.
+- **Support bundle**: `getSupportInfo` is ack-only. Return a bundle with our logs, queue stats and
+  warm-up timings, in whatever shape Protect expects.
+- **`RequestTts`** is ack-only; the firmware ships `ui-tts-agent`. Find what Protect uses it for.
+- **Throughput test**: target ~1,000 detections/hour; the most seen live is ~150/hour. Replay saved
+  clips as a synthetic burst to find the ceiling with 2 workers.
+- **Callback reconciliation**: after a result POST, confirm Protect stored it (e.g. the
+  `ramDetections` row for each `thumbnailTags` object), not just HTTP 200; log mismatches.
 - Session search: Protect also asks `NL_PARSE` for `multilingual-e5-small` (384-d,
   `smartDetectSessionsSearch.descEmbedding`); DIY-Key answers with CLIP, which Protect ignores.
 - `speechToText` (the firmware runs whisper `ggml-base.en` in ui-stt-agent).
