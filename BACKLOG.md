@@ -4,26 +4,44 @@ Open items for the macOS / Protect 7.3.70 work. Newest first within each section
 
 ## Next session
 
-- **Tests for the new logic** (pure functions; good local-agent work): `nl_search.parse` (tags,
-  time phrases, the `exact_match` rule), `second_verifier` (box conversion, IoU, verdicts),
-  `ram_tagger.tag_crop`/`describe`/`thumbnail_tags`, `clip_embed.blend`.
-- **Split `stage3_wss/ucp4_client.py`** (893 lines): framing + TLS into `ucp4_proto.py`, AI task
-  handling (RAM video/image, verification, result POSTs) into `ai_tasks.py`, the nl-search loop
-  into `nl_search.py`; keep the connection, setup RPCs and dispatch. No behaviour change; tests
-  first. Also drop the module-level state and in-function `cv2` imports where it falls out.
+- **Finish splitting `stage3_wss/ucp4_client.py`** (~2,300 lines). Done 2026-11-11: framing into
+  `ucp4_wire.py`, event-meta helpers into `task_meta.py` (re-exported, no behaviour change). Left:
+  task queue / prefetch / warm-up, the VLM summary helpers, enhance and describe handlers. Tests
+  patch these by name on `ucp4_client` (`_vlm_trigger`, `_submit_task`, `_task_stats`, ...), so
+  move the tests' patch targets with the code. Also drop module-level state and in-function `cv2`
+  imports where it falls out.
+- **Tests for the remaining pure logic**: `second_verifier` (box conversion, IoU, verdicts),
+  `ram_tagger.tag_crop`/`describe`, `clip_embed.blend`. (`nl_search.parse` plurals/linker and
+  `thumbnail_tags` have tests now.)
 
 ## Investigate
 
-- **Memory on 16 GB Macs** (Mac A swapping, 2026-11-10): measurements and recommendations are in
-  [docs/memory-speed-2026-11.md](docs/memory-speed-2026-11.md). To try on Mac A:
-  - `DIYKEY_FACE_ENHANCE_PROVIDER=mlprogram`: about 2.3-4.5 GB less, same pixels;
-  - `DIYKEY_CLIP_FP16=1`: about 1.7 GB less, ≤0.3 similarity points;
-  - `DIYKEY_VLM_MODEL=mlx-community/InternVL3_5-1B-4bit`: about 3.5 GB less, 3.6× faster.
-
-  Open:
-  - RAM++ MLProgram takes 6.5-7 min to compile on every start, even with ORT's cache;
-  - the `transformers` VLM backend is broken on transformers 5.x (`all_tied_weights_keys`, no `einops`).
-
+- **Description colour from the wrong car** (live 2026-11-11 07:44 and 10:54, Driveway): the event
+  description leads with the parked red car ("Red car, road, ...") when a passing white SUV or
+  van triggered it; RAM++ colours the whole frame. Take the colour from the triggering object's
+  crop (its `thumbnailMeta` box), or drop it when the crop is too small.
+- **Summary subject**: the VLM describes parked cars as part of the action ("passing by a red
+  car"). Try a snapshot with the triggering object outlined (magenta, thin; prompt names the
+  outline), offline on saved clips first, plain vs boxed side by side.
+- **Brand search** ("rogers van", live 2026-11-11): CLIP can't read logos at 224 px, so the word
+  only lowers similarity (51 %, rank 439 of 1,188; "red van" ranks it 2nd). Option: OCR on the
+  object's crop, blended into the stored embedding like the tag blend. Small VLMs invent car
+  makes, so don't take brands from the summary alone.
+- **Keep a small crop JPEG per stored object**, so a search miss can be checked after the clip
+  is gone.
+- **Memory on 16 GB Macs**: applied on Mac A 2026-11-10 (`DIYKEY_FACE_ENHANCE_PROVIDER=mlprogram`,
+  `DIYKEY_CLIP_FP16=1`, `DIYKEY_VLM_MODEL=mlx-community/InternVL3_5-1B-4bit`): warm-up 13.1 GB ->
+  5.0 GB, swap stopped growing. With `DIYKEY_TASK_WORKERS=2` (2026-11-11): median 8.3 s/event,
+  p90 queue wait 2 ms (was up to 899 s), no drops. Details:
+  [docs/memory-speed-2026-11.md](docs/memory-speed-2026-11.md). Open:
+  - Make MLProgram GFPGAN and FP16 CLIP the macOS defaults now they've run for days.
+  - RAM++ is 1.2-3 s per call and 2-3 calls per event, the biggest stage: try one frame, or FP16
+    (the AI Key's tagger runs FP16).
+  - RAM++ compile on restart: 6.5-8 min cold, ~90 s once CoreML has cached it (2026-11-11).
+  - Summaries take 5-8 s here vs 1.25 s on Mac B; try a single 448 px frame (the firmware uses
+    one 448 tile).
+  - The `transformers` VLM backend is broken on transformers 5.x (`all_tied_weights_keys`, no
+    `einops`).
 - Second-stage verification vs firmware (ui-infer-gateway second_verifier.py, 2.2.8):
   - No frame: live 2026-11-08 13:48, extraction failed ("no frame ... @4.750s", start == end,
     seek past the clip). Keeping the claimed type is right, as the firmware does; use its status
@@ -32,7 +50,9 @@ Open items for the macOS / Protect 7.3.70 work. Newest first within each section
     The firmware's verifier has no "nothing there" class: it keeps the detection unless top class
     prob >= 0.995 says another type.
   - Confidence: firmware reports min(det% + max(2, prob%/20), 99); we report our own.
-
+- **Slow clip downloads** come from the console (memory/CPU, Network app, tshark), not from mp4
+  vs ubv or parallel fetches (Mac B and console measurements, 2026-11-10). Prefetch hides most of
+  it; nothing to fix on our side unless it gets worse.
 - **"Failed to get device details from Network application … 404"** (Protect `service.log`).
   Protect asks the UniFi Network application about every adopted device's MAC and logs a 404 for
   each one Network doesn't know:
@@ -51,9 +71,6 @@ Open items for the macOS / Protect 7.3.70 work. Newest first within each section
   call makes it (find the message in `service.js`), what Protect uses the details for (uplink,
   PoE port, topology?), and whether anything a device reports (e.g. `getInfo`, discovery) could
   satisfy it.
-- ~~**First search after a cold start hung in the UI**~~ (fixed 2026-10-29: CLIP preloads at
-  start, `22f436e`; a second search took 0.3 s). Still to confirm: the UI no longer hangs, and
-  `http.log` shows the `/api/detection-nls` duration.
 - **`X-Token` re-sent after every restart**: `used_tokens` is per process, so a fresh start sends
   the old single-use token again. The console still accepts the connection; check whether it
   should only be sent before adoption completes.
@@ -62,30 +79,32 @@ Open items for the macOS / Protect 7.3.70 work. Newest first within each section
 
 ## Verify live
 
-- ~~Find Anything returns results: exact (`car`), vector (`night`)~~ verified 2026-10-29 (night
-  car event found; UI slider = min similarity, applied after the SQL).
-- Still to check: `IMAGE_SEARCH`, and whether the 0.1 tag blend holds up with many rows and
-  daytime crops.
+- `NL_PARSE` plurals and the firmware word linker (`DIYKEY_WORD_LINKER`, on Mac A since
+  2026-11-11): search "trees" / "pickup" and check the log line `nl-search word linker: ... words`.
+- `IMAGE_SEARCH`, and whether the 0.1 tag blend holds up with many rows and daytime crops.
 - Second Stage Verification on a real `RequestAI` (`second_verifier_mlabel`) task.
 - `thumbnailTags` rows for image (retroactive) tasks, not just video tasks.
+- ~~Find Anything returns results: exact (`car`), vector (`night`)~~ verified 2026-10-29.
+- ~~First search after a cold start hung in the UI~~ fixed 2026-10-29 (CLIP preloads at start).
 
 ## Build
 
-- ~~`NL_PARSE` synonyms and plurals~~ done 2026-11-11: hand aliases, a regular-plural fallback and
-  the firmware word linker (`DIYKEY_WORD_LINKER`). Not yet checked live in Find Anything.
 - Session search: Protect also asks `NL_PARSE` for `multilingual-e5-small` (384-d,
   `smartDetectSessionsSearch.descEmbedding`); DIY-Key answers with CLIP, which Protect ignores.
-- Face recognition in `recognizeKeyFrames` (`faceMeta`, 128-d SFace `faceEmbed`; pi-port has
-  YuNet + SFace) and LPR (`vehicleMeta`, `lprAttrs`).
-- `enhanceImage` (Legacy Camera Enhancement / face enhance) and `speechToText`.
-- Descriptions from a real model: the AI Key's VLM weights are in the 2.0.4 firmware
-  (`ui-vlm-ai-models`, `model.safetensors`); see whether its config names a public base model.
+- `speechToText` (the firmware runs whisper `ggml-base.en` in ui-stt-agent).
 - PPE "batched AI Key classify" path in Protect's DS (`ppe.log`): what it sends to an AI Key.
+- ~~Face recognition, LPR, `enhanceImage`, VLM descriptions~~ built (face: YuNet + SFace; LPR;
+  GFPGAN enhance; VLM summary via mlx, InternVL3.5-1B on Mac A; the firmware runs InternVL2.5-1B
+  BF16).
+- ~~`NL_PARSE` synonyms and plurals~~ done 2026-11-11 (aliases, plural fallback, word linker).
 
 ## Operations
 
-- A second instance end to end (`diykey_pg_init.sh` not yet run for real).
-- 3 macOS-only errors in `tests/test_run_all.py` (MAC lookup shells out under a mocked
-  `subprocess.run`).
+- **Second instance for a separate console** (3 ONVIF cameras behind diy-port), on Mac A:
+  ~5.3 GB with every model; trim to ~2.5-4 GB (face, face enhance and LPR off, 1 task worker,
+  VLM optional). Needs its own alias, MAC, device ID, GUID and PostgreSQL (`diykey_pg_init.sh`
+  not yet run for real); launchd setup needs sudo.
 - PostgreSQL statement logging is on for debugging (`ALTER SYSTEM RESET log_statement` to undo);
   `logs/postgres.log` is not rotated.
+- ~~3 macOS-only errors in `tests/test_run_all.py`~~ the full suite passes on macOS (420 tests,
+  2026-11-11).
