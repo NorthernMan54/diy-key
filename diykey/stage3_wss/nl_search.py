@@ -42,6 +42,9 @@ OBJECT_WORDS = {
 # query like "raccoons" or "coyote" carries objectTypes ['animal'] and the umbrella tag (live
 # 2026-11-12: "raccoons" parsed to tag raccoon but no object type).
 OBJECT_WORDS["animal"] |= {w for w in ram_tagger.KIND_WORDS["animal"] if " " not in w}
+# Same for vehicle kinds ("ambulance", "taxi", "fire truck"): phrases match through aliases and
+# key tags, so multi-word kinds are kept too.
+OBJECT_WORDS["vehicle"] |= set(ram_tagger.KIND_WORDS["vehicle"])
 STOP = {"a", "an", "the", "of", "in", "on", "at", "with", "and", "or", "to", "by", "near",
         "show", "me", "find", "any", "some", "is", "are", "was", "who", "that", "wearing"}
 # Query word -> the RAM tag Protect knows it by. Protect turns keyTags[].tags into ids with
@@ -61,6 +64,12 @@ ALIASES = {
     "squirrels": "squirrel", "foxes": "fox", "bears": "bear",
     "geese": "goose", "mice": "mouse", "sheep": "sheep",
     "grey": "gray",
+    # Emergency vehicles (2026-11-13): one-word and colloquial spellings of the RAM tags
+    # "fire truck" / "police car"; without these "firetruck" got no tag and "fire engine"
+    # split into the tags "fire" and "engine".
+    "firetruck": "fire truck", "firetrucks": "fire truck", "fire engine": "fire truck",
+    "fire engines": "fire truck", "cop car": "police car", "cop cars": "police car",
+    "squad car": "police car",
 }
 # Without DIYKEY_RAM_TAGS: only names checked against the fixture's enabled=true rows
 # (2026-11-07, ram_tags.csv from Protect 7.3.70; tests.test_nl_search re-checks when the
@@ -224,17 +233,20 @@ def parse(query, now=None):
     for size in (3, 2, 1):  # longest vocabulary phrase first ("police car" over "car")
         for i in range(len(words) - size + 1):
             gram = " ".join(words[i:i + size])
-            tag = _canonical(gram, vocab) if size == 1 else gram
+            tag = _canonical(gram, vocab)  # phrases too: "fire trucks", "fire engine"
             if gram in seen or (size == 1 and gram in STOP) or tag not in vocab:
                 continue
             if any(f" {gram} " in f" {s} " for s in seen):  # inside a longer match
                 continue
             seen.add(gram)
             key_tags.append({"matchedWord": gram, "tags": [tag]})
-    object_types = [t for t in OBJECT_WORDS if any(_object_type(w) == t for w in words)]
+    phrase_tags = [t for k in key_tags for t in k["tags"]]
+    object_types = [t for t in OBJECT_WORDS
+                    if any(_object_type(w) == t for w in words + phrase_tags)]
     bare = retrieval.strip()
     exact = (len(words) == 1 and _object_type(bare) is not None
-             and _canonical(bare, vocab) in vocab)
+             and _canonical(bare, vocab) in vocab
+             and " " not in _canonical(bare, vocab))  # "firetruck" acts like "fire truck"
     for w in words:
         t = _object_type(w)
         if t is None:
@@ -253,6 +265,12 @@ def parse(query, now=None):
                 key_tags.append({"matchedWord": w, "tags": want})
         else:
             entry["tags"] += [x for x in want if x not in entry["tags"]]
+    # A phrase whose words carry no type on their own ("fire engine" -> fire truck) still gets
+    # its umbrella, like "fire truck" does through "truck".
+    for k in key_tags:
+        t = next((_object_type(x) for x in k["tags"] if _object_type(x)), None)
+        if t and UMBRELLA[t] in vocab and UMBRELLA[t] not in k["tags"] and not exact:
+            k["tags"].append(UMBRELLA[t])
     reply = {"keyTags": key_tags, "objectTypes": object_types,
              "txtEmbed": clip_embed.text_embed(retrieval or text) or [],
              "model": clip_embed.MODEL_NAME, "dim": clip_embed.DIM}

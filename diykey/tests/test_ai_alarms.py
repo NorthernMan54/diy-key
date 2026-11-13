@@ -286,3 +286,46 @@ class TestAnimalObjectType(_VocabCase):
 
     def test_non_animal_unchanged(self):
         self.assertIsNone(nl_search._object_type("boxes"))
+
+
+class TestEmergencyVehicles(_VocabCase):
+    """2026-11-13: "firetruck" got no tag, "fire engine" split into fire + engine, and
+    "ambulance" had no vehicle type."""
+
+    def setUp(self):
+        super().setUp()
+        nl_search._linker = None
+        nl_search._vocab = set(nl_search.FALLBACK_VOCAB) | {
+            "fire truck", "police car", "ambulance", "truck", "car", "vehicle", "fire",
+            "engine", "officer"}
+
+    def _tags(self, q):
+        r = nl_search.parse(q)
+        return {k["matchedWord"]: k["tags"] for k in r["keyTags"]}, r["objectTypes"]
+
+    def test_spellings_of_fire_truck(self):
+        for q in ("firetruck", "fire truck", "fire engine", "fire trucks"):
+            tags, types = self._tags(q)
+            flat = [t for ts in tags.values() for t in ts]
+            self.assertIn("fire truck", flat, q)
+            self.assertNotIn("fire", flat, q)  # never the "fire" (flames) tag
+            self.assertIn("vehicle", flat, q)
+            self.assertEqual(types, ["vehicle"], q)
+
+    def test_ambulance_is_a_vehicle(self):
+        tags, types = self._tags("ambulance")
+        self.assertEqual(types, ["vehicle"])
+        self.assertEqual(tags["ambulance"], ["ambulance", "vehicle"])
+
+    def test_cop_car_is_police_car(self):
+        tags, _ = self._tags("cop car")
+        flat = [t for ts in tags.values() for t in ts]
+        self.assertIn("police car", flat)
+        self.assertNotIn("officer", flat)
+
+
+class TestFiretruckLikeFireTruck(TestEmergencyVehicles):
+    def test_same_reply_shape(self):
+        a, b = nl_search.parse("firetruck"), nl_search.parse("fire truck")
+        self.assertEqual(bool(a.get("exact_match")), bool(b.get("exact_match")))
+        self.assertEqual(a["objectTypes"], b["objectTypes"])
