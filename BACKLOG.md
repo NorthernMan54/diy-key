@@ -100,6 +100,12 @@ firmware: confirm each field and action from Protect's code or a live capture be
 - **Support bundle**: `getSupportInfo` is ack-only. Return a bundle with our logs, queue stats and
   warm-up timings, in whatever shape Protect expects.
 - **`RequestTts`** is ack-only; the firmware ships `ui-tts-agent`. Find what Protect uses it for.
+- **Greyed-out Alarm Manager triggers** (Package, PPE Violation, Line Crossing; seen 2026-11-13
+  with this AI Key adopted). The firmware's `/etc/featureflags.json` (2.2.8) has no flag for them,
+  so they are probably gated by camera capabilities. Ask in the Protect UI bundle: what enables
+  each trigger — camera `featureFlags.smartDetectTypes`, an AI Key `featureFlags` entry, or
+  something else? Firmware flags we don't send: `supportTts`, `supportMessageProxy`,
+  `hasLcdScreen`.
 - **Throughput test**: target ~1,000 detections/hour; the most seen live is ~150/hour. Replay saved
   clips as a synthetic burst to find the ceiling with 2 workers.
 - **Callback reconciliation**: after a result POST, confirm Protect stored it (e.g. the
