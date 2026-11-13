@@ -329,3 +329,13 @@ class TestFiretruckLikeFireTruck(TestEmergencyVehicles):
         a, b = nl_search.parse("firetruck"), nl_search.parse("fire truck")
         self.assertEqual(bool(a.get("exact_match")), bool(b.get("exact_match")))
         self.assertEqual(a["objectTypes"], b["objectTypes"])
+
+
+class TestExactOnlyForDetectorLabels(TestEmergencyVehicles):
+    """Live 2026-11-13: exact mode ranked misread vans above the real ambulance."""
+
+    def test_ambulance_not_exact(self):
+        self.assertFalse(nl_search.parse("ambulance").get("exact_match"))
+
+    def test_car_still_exact(self):
+        self.assertTrue(nl_search.parse("car").get("exact_match"))

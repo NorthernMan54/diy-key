@@ -246,7 +246,13 @@ def parse(query, now=None):
     bare = retrieval.strip()
     exact = (len(words) == 1 and _object_type(bare) is not None
              and _canonical(bare, vocab) in vocab
-             and " " not in _canonical(bare, vocab))  # "firetruck" acts like "fire truck"
+             and " " not in _canonical(bare, vocab)  # "firetruck" acts like "fire truck"
+             and _canonical(bare, vocab) not in ram_tagger.PLUS_VEHICLE_KINDS)
+    # Exact mode orders by the label's confidence, not similarity (M/718745:18-28). Live
+    # 2026-11-13: "ambulance" (exact) listed RAM++'s misread red vans (ambulance ~1.0) above the
+    # real ambulance (0.999, 80.7 % similarity, rank 1 by vector). The special vehicle kinds only
+    # RAM++ guesses (ambulance, fire truck, police car, school bus, tow truck) therefore go
+    # through the vector search; other object words keep exact mode.
     for w in words:
         t = _object_type(w)
         if t is None:
