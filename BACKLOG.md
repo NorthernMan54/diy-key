@@ -95,17 +95,39 @@ firmware: confirm each field and action from Protect's code or a live capture be
 - **Person attributes** (clothing type/colour, bags, hats, glasses): the firmware has PAR engines
   (`SmartPAR_lower_enhance.engine`, `SmartMM_*` in ubnt_ai_infer_agent). Find which Protect
   result fields carry them; we only send RAM++ tags today.
-- **Package context** (person carrying / dropping off a package): only RAM++ `package`/`box` tags
-  now. Check whether Protect has a package event or attribute an AI Key fills.
+- **Describe labels are all dropped** (found 2026-11-13 in Protect 7.3.70 `service.js`): in deep
+  mode `_handle_describe` sends bare RAM++ tags (`package`, `box`, `man`) as `labels`, but
+  Protect's `sanitizeSessionLabels` (M/594367:333) drops any label without a `:`. Send
+  `key:value` labels instead. Protect maps the prompt's keys (`top`, `bottom`, `topColor`,
+  `head`, `acc`, `carry`, `mobility`) and passes any other key in `LABEL_NAMESPACES` unchanged
+  (`gender`, `ageRange`, `clothingType`, `upperClothingColor`, `accessory`, `carrying`,
+  `vehicleType`, `color`, `vehicleBrand`, `species`, ...). These labels feed the person/vehicle
+  attribute filters in Find Anything's session search (deep analysis), whose values only show
+  once some session has them.
+- **Package attribute** (person carrying a package): the only AI Key route is the
+  Find Anything "Carrying" filter (box, package, bag, suitcase, umbrella, groceries, ladder,
+  tool). `carry:package` is dropped (Protect's `carry` map only has box, bag, groceries, tool,
+  ladder, umbrella, so even the firmware's own prompt can't produce it), but `carrying:package`
+  passes as is. So on a person session with a RAM++ `package`/`parcel`/`box` tag, send
+  `carrying:package` (or `carrying:box`). RAM tags on `thumbnailTags` never become `carrying:*`
+  (`convertRamTagsToLabels`, M/587258). Alarm Manager has no AI Key package option: its Package
+  trigger is camera-gated (below); the nearest is the AI Trigger (NLS, free text such as
+  "person carrying a package").
 - **Support bundle**: `getSupportInfo` is ack-only. Return a bundle with our logs, queue stats and
   warm-up timings, in whatever shape Protect expects.
 - **`RequestTts`** is ack-only; the firmware ships `ui-tts-agent`. Find what Protect uses it for.
-- **Greyed-out Alarm Manager triggers** (Package, PPE Violation, Line Crossing; seen 2026-11-13
-  with this AI Key adopted). The firmware's `/etc/featureflags.json` (2.2.8) has no flag for them,
-  so they are probably gated by camera capabilities. Ask in the Protect UI bundle: what enables
-  each trigger — camera `featureFlags.smartDetectTypes`, an AI Key `featureFlags` entry, or
-  something else? Firmware flags we don't send: `supportTts`, `supportMessageProxy`,
-  `hasLcdScreen`.
+- ~~**Greyed-out Alarm Manager triggers** (Package, PPE Violation, Line Crossing; seen
+  2026-11-13)~~ answered 2026-11-13: none of the three depends on the AI Key's flags. The
+  trigger list is Protect's `automationManager` (M/390666 `requires`, scope filters
+  M/754190), and a trigger is enabled once one adopted camera matches its scope:
+  - Line Crossing: a smart camera with at least one line drawn (`smartDetectLines`). All our
+    cameras have `hasLineCrossing=true` and no lines, so draw one.
+  - Package: a camera whose own `featureFlags.smartDetectTypes` has `package` (not
+    `extendedAiFeatures`). No adopted camera here has it.
+  - PPE Violation: an adopted AI Key (as for AI Trigger) plus a camera with an industrial
+    `spatialIntelligenceZone` (`helmet`/`vest` enforcement). The zone editor needs
+    `featureFlags.hasSafetyZones` (Backyard, Wasaga Doorbell) and, by the UI code, probably an
+    adopted AI Key. Not yet tried live.
 - **Throughput test**: target ~1,000 detections/hour; the most seen live is ~150/hour. Replay saved
   clips as a synthetic burst to find the ceiling with 2 workers.
 - **Callback reconciliation**: after a result POST, confirm Protect stored it (e.g. the
