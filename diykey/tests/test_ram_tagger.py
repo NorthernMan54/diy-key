@@ -370,7 +370,7 @@ class ClaimedTypeTest(unittest.TestCase):
 
     def test_coco_family_label_keeps_it(self):
         tagger = CocoTagger(["dog"], self.plus([0.88, 0.85, 0.1, 0.1, 0.1]))
-        tags = self.thumb(tagger)
+        tags = self.thumb(tagger, frame_tags={"dog"})
         self.assertIn("dog", tags)
         self.assertIn("animal", tags)
 
@@ -446,7 +446,21 @@ class SpeciesTest(unittest.TestCase):
     def test_species_the_frame_never_named_is_dropped(self):
         got = self.tags(["bear"], [0.1, 0.1, 0.83, 0.1, 0.1], {"crack", "pavement"})
         self.assertNotIn("bird", got)
-        self.assertIn("bear", got)  # COCO's family label stays when no species is agreed
+        self.assertNotIn("bear", got)  # COCO's guess needs backing too
+        self.assertIn("animal", got)
+
+    def test_squirrel_is_not_a_bear(self):
+        # Live 2026-11-15 09:26 Backyard: crop bear 0.85, whole frame house/yard/stump.
+        got = self.tags(["bear"], [0.1] * 5, {"house", "yard", "grass", "stump"})
+        self.assertNotIn("bear", got)
+        self.assertIn("animal", got)
+
+    def test_a_real_bear_stays_a_bear(self):
+        self.assertIn("bear", self.tags(["bear"], [0.1] * 5, {"bear", "yard"}))
+        # Image task (no whole frames): a crop big enough keeps it, a small one doesn't.
+        self.assertNotIn("bear", self.tags(["bear"], [0.1] * 5, None))
+        self.assertIn("bear", self.tags(["bear"], [0.1] * 5, None,
+                                        img=np.full((200, 300, 3), 100, np.uint8)))
 
     def test_coco_and_ram_plus_agreeing_give_one_tag(self):
         got = self.tags(["dog"], [0.1, 0.9, 0.1, 0.1, 0.1], {"dog"})

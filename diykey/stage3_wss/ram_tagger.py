@@ -467,6 +467,18 @@ def crop_tags(tagger, img_bgr, hint, frame_tags=None):
         for t in family_tags:
             found.pop(t, None)
         found[best] = round(species[best], 3)
+    elif object_type == "animal":
+        # COCO's family label needs the same backing. It knows 10 animals, so anything else
+        # gets the nearest: live 2026-11-15 09:26 Backyard (event bd89a32e, tracker 18708) a
+        # black squirrel went out as bear 0.85; the summary said squirrel and the whole frame
+        # had no bear. A real bear is still named by RAM++ on the crop or the whole frame.
+        for t in [t for t in family_tags if t in found]:
+            if t in raw_plus:
+                continue
+            backed = t in frame_tags if frame_tags is not None \
+                else min(img_bgr.shape[:2]) >= _species_min_px()
+            if not backed:
+                del found[t]
     # Colour only on a vehicle: Protect's label port emits color: for vehicles alone
     # (protect_labels.py:35-38), and a lone red/white on a person matched colour rules.
     for key in (("vehicleType", "color") if object_type == "vehicle" else ()):

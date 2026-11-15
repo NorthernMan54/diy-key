@@ -55,7 +55,8 @@ def _object_tags(detector_tags, hint):
     with mock.patch.object(clip_embed, "image_embed", return_value=None):
         out = ram_tagger.thumbnail_tags(_FakeTagger(detector_tags),
                                         [{"trackerID": 1, "keyMomentMs": 5, "img": img,
-                                          "hint": hint}])
+                                          "hint": hint}],
+                                        set(detector_tags))  # a video event's frames see it too
     return {t["tag"] for t in out[0]["tags"]}
 
 
