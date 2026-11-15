@@ -10,16 +10,11 @@ Open items for the macOS / Protect 7.3.70 work. Newest first within each section
   patch these by name on `ucp4_client` (`_vlm_trigger`, `_submit_task`, `_task_stats`, ...), so
   move the tests' patch targets with the code. Also drop module-level state and in-function `cv2`
   imports where it falls out.
-- **Tests for the remaining pure logic**: `second_verifier` (box conversion, IoU, verdicts),
-  `ram_tagger.tag_crop`/`describe`, `clip_embed.blend`. (`nl_search.parse` plurals/linker and
-  `thumbnail_tags` have tests now.)
+- **Tests for the remaining pure logic**: `ram_tagger.tag_crop`, `clip_embed.blend`. (`nl_search.parse`, `thumbnail_tags`, `describe`
+  and `second_verifier` have tests now.)
 
 ## Investigate
 
-- **Description colour from the wrong car** (live 2026-11-11 07:44 and 10:54, Driveway): the event
-  description leads with the parked red car ("Red car, road, ...") when a passing white SUV or
-  van triggered it; RAM++ colours the whole frame. Take the colour from the triggering object's
-  crop (its `thumbnailMeta` box), or drop it when the crop is too small.
 - **Summary subject**: the VLM describes parked cars as part of the action ("passing by a red
   car"). Try a snapshot with the triggering object outlined (magenta, thin; prompt names the
   outline), offline on saved clips first, plain vs boxed side by side.
@@ -42,14 +37,6 @@ Open items for the macOS / Protect 7.3.70 work. Newest first within each section
     one 448 tile).
   - The `transformers` VLM backend is broken on transformers 5.x (`all_tied_weights_keys`, no
     `einops`).
-- Second-stage verification vs firmware (ui-infer-gateway second_verifier.py, 2.2.8):
-  - No frame: live 2026-11-08 13:48, extraction failed ("no frame ... @4.750s", start == end,
-    seek past the clip). Keeping the claimed type is right, as the firmware does; use its status
-    "skipped", and fix the seek by fetching a short window around the thumbnail time.
-  - No match: we return isValidDetection false at confidence 0.05 when the detector sees nothing.
-    The firmware's verifier has no "nothing there" class: it keeps the detection unless top class
-    prob >= 0.995 says another type.
-  - Confidence: firmware reports min(det% + max(2, prob%/20), 99); we report our own.
 - **Slow clip downloads** come from the console (memory/CPU, Network app, tshark), not from mp4
   vs ubv or parallel fetches (Mac B and console measurements, 2026-11-10). Prefetch hides most of
   it; nothing to fix on our side unless it gets worse.
@@ -82,7 +69,11 @@ Open items for the macOS / Protect 7.3.70 work. Newest first within each section
 - `NL_PARSE` plurals and the firmware word linker (`DIYKEY_WORD_LINKER`, on Mac A since
   2026-11-11): search "trees" / "pickup" and check the log line `nl-search word linker: ... words`.
 - `IMAGE_SEARCH`, and whether the 0.1 tag blend holds up with many rows and daytime crops.
-- Second Stage Verification on a real `RequestAI` (`second_verifier_mlabel`) task.
+- Second Stage Verification on a real `RequestAI` (`second_verifier_mlabel`) task, with the
+  firmware-style verdicts (2026-11-15: keep unless another type scores >= `DIYKEY_VERIFY_OVERRIDE`,
+  kept confidence min(det% + max(2, prob%/20), 99), "skipped" without a frame).
+- Description colour from the tracked vehicle's crop (2026-11-15): a car passing the parked red
+  car on Driveway should no longer read "Red car, ...".
 - `thumbnailTags` rows for image (retroactive) tasks, not just video tasks.
 - ~~Find Anything returns results: exact (`car`), vector (`night`)~~ verified 2026-10-29.
 - ~~First search after a cold start hung in the UI~~ fixed 2026-10-29 (CLIP preloads at start).

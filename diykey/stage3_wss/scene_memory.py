@@ -585,7 +585,7 @@ def filter_result(result, scene):
             out["keyMomentsTags"] = moments
             ordered = sorted(merged.items(), key=lambda kv: -kv[1])
             out["description"] = ram_tagger.describe(
-                [{"tag": t, "confScore": s} for t, s in ordered])
+                [{"tag": t, "confScore": s} for t, s in ordered], out.get("thumbnailTags"))
             log.info("event %s: scene memory removed tags %s (description was %r)",
                      out.get("eventId"), sorted(dropped), result.get("description"))
         out["description"] = summary_text(out.get("description"), scene)

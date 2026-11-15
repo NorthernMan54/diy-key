@@ -1889,6 +1889,23 @@ class TestRoiShapes(unittest.TestCase):
             self.assertEqual(derived["vehicle"][0]["roi"]["objectType"], otype)
 
 
+class TestVerifyWindow(unittest.TestCase):
+    def test_covering_export_is_unchanged(self):
+        url = "/proxy/protect/api/video/export?camera=c&start=1000&end=9000"
+        self.assertEqual(ucp4_client._verify_window(url, [2000, 5000]), (url, 1000))
+
+    def test_zero_length_export_is_widened(self):
+        # Live 2026-11-08 13:48: start == end, thumbnail 4.75 s later.
+        url, start = ucp4_client._verify_window("/x/export?camera=c&start=1000&end=1000", [5750])
+        self.assertEqual(start, 3750)
+        self.assertIn("start=3750", url)
+        self.assertIn("end=7750", url)
+        self.assertIn("camera=c", url)
+
+    def test_export_without_times_is_unchanged(self):
+        self.assertEqual(ucp4_client._verify_window("/x/export?camera=c", [5]), ("/x/export?camera=c", 5))
+
+
 class TestRequestAiUrl(unittest.TestCase):
     def test_posts_a_relative_resurl_on_the_console(self):
         post = mock.Mock(return_value=mock.Mock(status_code=200, text="{}"))

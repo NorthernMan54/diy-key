@@ -83,6 +83,23 @@ class RamImagesTest(unittest.TestCase):
         self.assertEqual(ram_tagger.describe(tags("white", "pickup truck")),
                          "White pickup truck detected.")
 
+    def test_colour_comes_from_the_tracked_vehicle(self):
+        tags = lambda *n: [{"tag": t, "confScore": 0.9} for t in n]
+        obj = lambda *n: {"trackerID": 1, "keyMomentMs": 1, "tags": tags(*n)}
+        frame = tags("red", "car", "road")
+        # Live 2026-11-11 07:44 Driveway: a white SUV passing the parked red car.
+        self.assertEqual(ram_tagger.describe(frame, [obj("white", "suv", "vehicle")]),
+                         "White car and road detected.")
+        self.assertEqual(ram_tagger.describe(frame, [obj("white van", "vehicle")]),
+                         "White car and road detected.")
+        # A vehicle crop without a colour: no colour rather than the frame's.
+        self.assertEqual(ram_tagger.describe(frame, [obj("van", "vehicle")]),
+                         "Car and road detected.")
+        # Only people tracked, or no objects: the frame's colour, as before.
+        self.assertEqual(ram_tagger.describe(frame, [obj("man", "person")]),
+                         "Red car and road detected.")
+        self.assertEqual(ram_tagger.describe(frame, []), "Red car and road detected.")
+
     def test_build_result_without_roi(self):
         res = ram_tagger.build_result(FakeTagger(), "cam", "ev", {1000: self.path})
         self.assertIsInstance(res, dict)

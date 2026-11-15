@@ -10,10 +10,17 @@ round(100 * detectionConfidence), keeping the old ones as preReverification*.
 
 The box is matched against the COCO detector (ram_tagger.RamTagger) on the
 full frame by IoU; when nothing overlaps, the box (with a margin) is run on its
-own, which helps small or IR-washed objects. No match leaves the original type
-with a low confidence.
+own, which helps small or IR-washed objects.
+
+Verdicts follow the firmware's verifier (ui-infer-gateway second_verifier.py, fw 2.2.8): it
+has no "nothing there" class, so it keeps the camera's detection unless the model is sure of
+another type (top class prob >= 0.995), and reports min(det% + max(2, prob% / 20), 99) as the
+confidence of a kept one. Our detector's scores are YOLO confidences, not a classifier's
+softmax, and rarely pass 0.995, so another type wins at DIYKEY_VERIFY_OVERRIDE (default 0.8).
+No frame gives modelRunStatus "skipped", as the firmware's placeholder does.
 """
 import logging
+import os
 import time
 
 import cv2
@@ -24,8 +31,32 @@ log = logging.getLogger("diykey.verify")
 VEHICLES = {"car", "truck", "bus", "motorcycle", "bicycle", "train", "boat", "airplane"}
 ANIMALS = {"bird", "cat", "dog", "horse", "sheep", "cow", "elephant", "bear", "zebra", "giraffe"}
 MIN_IOU = 0.3
-NO_MATCH_CONFIDENCE = 0.05
 CROP_MARGIN = 0.3
+
+
+def override_min():
+    """Detector score at which another type replaces the camera's (DIYKEY_VERIFY_OVERRIDE)."""
+    try:
+        return float(os.environ.get("DIYKEY_VERIFY_OVERRIDE") or 0.8)
+    except ValueError:
+        return 0.8
+
+
+def kept_confidence(det_pct, prob):
+    """The firmware's confidence for a detection it keeps: min(det% + max(2, prob% / 20), 99),
+    as 0..1. det_pct: the camera's confidence (0..100); prob: the verifier's score (0..1)."""
+    return round(min(float(det_pct or 0) + max(2.0, prob * 100 / 20), 99.0) / 100, 3)
+
+
+def verdict(claimed, det_pct, kind, score, override=None):
+    """(isValidDetection, detectedAs, detectionConfidence) for one box: the detector's best
+    (kind, score) against the camera's claimed type and confidence."""
+    override = override_min() if override is None else override
+    if kind and kind != claimed and score >= override:
+        return False, kind, round(score, 3)
+    if kind == claimed:
+        return True, claimed, kept_confidence(det_pct, score)
+    return True, claimed, round(float(det_pct or 0) / 100, 3)
 
 
 def protect_type(label):
@@ -110,18 +141,19 @@ def verify(tagger, frames, params):
             tracker = roi.get("trackerID", roi.get("trackerId"))
             row = {"thumbnailMs": ts, "trackerID": int(tracker) if tracker is not None else -1,
                    "objectType": claimed, "iouScore": None, "detectionConfidenceList": []}
+            det_pct = roi.get("confidence") or 0
             if img is None:
-                row.update(isValidDetection=True, detectedAs=claimed, modelRunStatus="noFrame",
-                           detectionConfidence=(roi.get("confidence") or 0) / 100)
+                row.update(isValidDetection=True, detectedAs=claimed, modelRunStatus="skipped",
+                           detectionConfidence=round(det_pct / 100, 3))
             else:
                 kind, score, overlap, how = classify(tagger, img, roi)
-                if kind:
-                    row.update(isValidDetection=kind == claimed, detectedAs=kind,
-                               detectionConfidence=round(score, 3), iouScore=overlap,
-                               modelRunStatus=f"success:{how}")
-                else:
-                    row.update(isValidDetection=False, detectedAs=claimed,
-                               detectionConfidence=NO_MATCH_CONFIDENCE, modelRunStatus="noMatch")
+                valid, detected, conf = verdict(claimed, det_pct, kind, score)
+                row.update(isValidDetection=valid, detectedAs=detected, detectionConfidence=conf,
+                           iouScore=overlap, modelRunStatus=f"success:{how}" if kind
+                           else "noMatch")
+                if kind and kind != detected:
+                    log.info("verify %s @%s: saw %s %.2f under DIYKEY_VERIFY_OVERRIDE; kept %s",
+                             params.get("event"), ts, kind, score, claimed)
             rows.append(row)
             log.info("verify %s @%s tracker %s: claimed %s -> %s %.2f (%s)", params.get("event"),
                      ts, row["trackerID"], claimed, row["detectedAs"], row["detectionConfidence"],

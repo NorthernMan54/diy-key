@@ -31,7 +31,7 @@ import sys
 import threading
 import time
 import uuid
-from urllib.parse import parse_qsl, urlsplit
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 import requests
 import urllib3
@@ -897,6 +897,25 @@ def _callback_headers(mac_nosep):
     }
 
 
+VERIFY_PAD_MS = 2000
+
+
+def _verify_window(req_url, moments, pad_ms=VERIFY_PAD_MS):
+    """(reqUrl, start ms) for the verification clip. Live 2026-11-08 13:48: the export had
+    start == end, so ffmpeg found no frame at the thumbnail (4.750 s past the clip). When the
+    export doesn't cover every thumbnail, ask for the thumbnails +- pad_ms instead."""
+    parts = urlsplit(req_url)
+    query = dict(parse_qsl(parts.query))
+    start, end = query.get("start", ""), query.get("end", "")
+    if start.isdigit() and end.isdigit() and int(start) <= moments[0] and moments[-1] <= int(end) \
+            and int(end) > int(start):
+        return req_url, int(start)
+    if not (start.isdigit() and end.isdigit()):
+        return req_url, int(start) if start.isdigit() else moments[0]
+    query["start"], query["end"] = str(moments[0] - pad_ms), str(moments[-1] + pad_ms)
+    return urlunsplit(parts._replace(query=urlencode(query))), moments[0] - pad_ms
+
+
 def _verify_from_clip(params, mac_nosep, console_host):
     """Second Stage Verification on the event's own frames: fetch reqUrl (the export around
     the thumbnails) as MP4, grab each thumbnail time, classify each box. None when there is
@@ -910,8 +929,7 @@ def _verify_from_clip(params, mac_nosep, console_host):
                      | set(params.get("thumbnailMs") or []))
     if not moments:
         return None
-    start = dict(parse_qsl(urlsplit(req_url).query)).get("start")
-    start = int(start) if start and start.isdigit() else moments[0]
+    req_url, start = _verify_window(req_url, moments)
     clips_dir = os.path.join(STATE_DIR, "clips")
     clip = clip_fetch.fetch_clip(
         clip_fetch.mp4_url(console_host, CONSOLE_INTERNAL_API_PORT, req_url),

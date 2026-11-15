@@ -506,12 +506,38 @@ COLOURS = {"white", "black", "grey", "gray", "silver", "red", "blue", "green", "
 _COLOURABLE = {"car", "vehicle"} | PLUS_VEHICLE_ONLY | PLUS_VEHICLE_KINDS
 
 
-def describe(tags):
+def object_colour(objects):
+    """The colour of the first tracked vehicle in thumbnailTags entries, from its own crop (the
+    camera's color attribute, or a RAM++ "white van" style tag), or None when it has none."""
+    for o in objects or ():
+        tags = sorted(o.get("tags") or (), key=lambda t: -t.get("confScore", 0))
+        if all(t["tag"] != UMBRELLA["vehicle"] for t in tags):
+            continue
+        for t in tags:
+            first, _, rest = t["tag"].partition(" ")
+            if t["tag"] in COLOURS or (first in COLOURS and rest in _COLOURABLE):
+                return first
+        return None
+    return None
+
+
+def _has_vehicle(objects):
+    return any(t["tag"] == UMBRELLA["vehicle"] for o in objects or () for t in o.get("tags") or ())
+
+
+def describe(tags, objects=None):
     """One sentence from the tags, e.g. "Person and car detected at night." or "Person and
     white car detected." (a colour tag goes in front of the first vehicle; with none it is left
-    out)."""
+    out).
+
+    objects: the event's thumbnailTags. When one is a vehicle, the colour comes from its crop
+    only: RAM++ colours the whole frame, so live 2026-11-11 07:44 and 10:54 on Driveway a white
+    SUV and a van were described as "Red car, road, ..." after the parked red car."""
     names = [t["tag"] for t in tags if t["tag"] != NIGHT_TAG]
     colours = [n for n in names if n in COLOURS]
+    if _has_vehicle(objects):
+        colour = object_colour(objects)
+        colours = [colour] if colour else []
     things = [n for n in names if n not in COLOURS]
     target = next((i for i, n in enumerate(things) if n in _COLOURABLE), None)
     if colours and target is not None:
@@ -655,7 +681,7 @@ def build_result(tagger, camera_id, event_id, frames, pre_ms=0, hints=None, obje
         "cameraId": camera_id,
         "eventId": event_id,
         "status": "success",
-        "description": describe(all_tags),
+        "description": describe(all_tags, thumbs),
         "keyMomentsTags": key_moments,
         **({"thumbnailTags": thumbs} if thumbs else {}),
         "inferBoxMs": infer_ms,
