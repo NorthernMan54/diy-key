@@ -139,7 +139,25 @@ firmware: confirm each field and action from Protect's code or a live capture be
 - Session search: Protect also asks `NL_PARSE` for `multilingual-e5-small` (384-d,
   `smartDetectSessionsSearch.descEmbedding`); DIY-Key answers with CLIP, which Protect ignores.
 - `speechToText` (the firmware runs whisper `ggml-base.en` in ui-stt-agent).
-- PPE "batched AI Key classify" path in Protect's DS (`ppe.log`): what it sends to an AI Key.
+- **PPE (`ppe_mlabel`) is answered wrongly** (Saul 2026-11-16, Protect 7.3.70 DS + AI Key
+  2.2.8 firmware). `ucp4_client` treats `ppe_mlabel` like `second_verifier_mlabel`
+  (person/vehicle/animal verdicts); the real model is helmet/vest:
+  - Protect's Rust DS (`src/services/ppe/service.rs`, `ppe.log`) batches per camera, captures a
+    snapshot it serves at `/internal/ppe/snapshot/:token`, and injects `RequestAI` with
+    `targetUri :7788/v1/models/ppe_mlabel/inference` and `resUrl` `/internal/ppe/result/:token`
+    over the AI Key connection. "PPE result: empty (AI Key still accumulating)" is a normal
+    reply; violations map to `missingHelmet` / `missingVest` / `missingSafetyGlasses`
+    (M/482984), alarm checkboxes "No Hard Hat" / "No Safety Vest" (M/390666).
+  - AI Key 2.2.8 `ui-infer-gateway` (FastAPI on :7788, `models/ppe.py`, `config.yaml`):
+    request `params.aggEvent[]` = `{eventId, cameraId, imageURL, objects:[{trackerId,
+    coords:[x,y,w,h] 0-1000]}]}`; `ppe_mlabel.engine` (N,3,224,224) letterboxed, sigmoid over
+    `[helmet, vest, is_full_body]`; a crop counts only if `is_full_body >= 0.28`, and an
+    object is emitted after `agg_min_samples: 3` samples per (cameraId, trackerId), max
+    aggregated. Reply `{model, action, inference_time_ms, result:[{eventId, cameraId,
+    objects:[{trackerId, helmet, vest}]}]}` (scores 0-1; empty objects while accumulating).
+  - Not live: no `ppe.log` on the console (no industrial camera, so the DS never sends).
+  - To build: answer `ppe_mlabel` with that shape (needs a helmet/vest classifier, or the
+    ONNX behind `ppe_mlabel.engine` if one can be found); test with a recorded request.
 - ~~Face recognition, LPR, `enhanceImage`, VLM descriptions~~ built (face: YuNet + SFace; LPR;
   GFPGAN enhance; VLM summary via mlx, InternVL3.5-1B on Mac A; the firmware runs InternVL2.5-1B
   BF16).
