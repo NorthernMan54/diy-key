@@ -40,24 +40,14 @@ Open items for the macOS / Protect 7.3.70 work. Newest first within each section
 - **Slow clip downloads** come from the console (memory/CPU, Network app, tshark), not from mp4
   vs ubv or parallel fetches (Mac B and console measurements, 2026-11-10). Prefetch hides most of
   it; nothing to fix on our side unless it gets worse.
-- **"Failed to get device details from Network application … 404"** (Protect `service.log`).
-  Protect asks the UniFi Network application about every adopted device's MAC and logs a 404 for
-  each one Network doesn't know:
-  ```
-  Failed to get device details from Network application for aa:bb:cc:33:44:cc: 404
-  Failed to get device details from Network application for aa:bb:cc:33:44:bb: 404
-  Failed to get device details from Network application for aa:bb:cc:33:44:aa: 404
-  Failed to get device details from Network application for 02:00:00:00:00:01: 404
-  Failed to get device details from Network application for fc:ec:da:00:00:01: 404
-  Failed to get device details from Network application for fc:ec:da:00:00:02: 404
-  Failed to get device details from Network application for 02:00:00:00:00:03: 404
-  ```
-  `fc:ec:da:00:00:01` is this DIY-Key instance; the others are emulated cameras
-  (`aa:bb:cc:33:44:*`, unifi-cam-proxy), an ONVIF camera, an AI Port and another emulated camera.
-  None are Network clients with these MACs, so this is probably harmless noise. To check: which
-  call makes it (find the message in `service.js`), what Protect uses the details for (uplink,
-  PoE port, topology?), and whether anything a device reports (e.g. `getInfo`, discovery) could
-  satisfy it.
+- ~~**"Failed to get device details from Network application … 404"**~~ parked 2026-11-16
+  (Saul, harmless noise). Protect's `networkApp.deviceInfo` (M/727717:34-71) GETs
+  `{networkAppApi}/devices/<mac>/details` from (a) the Wi-Fi state refresh every 60 s for
+  connected non-bridge devices (Network app >= 7.4.40, M/620729:18) and (b) the camera uplink
+  lookup 100 s after each camera connects (M/408614:21). A 404 is logged at error level and
+  returns null; the callers skip the update and keep the old `uplinkDevice` /
+  `wifiConnectionState`. Seen for this DIY-Key (`fc:ec:da:00:00:01`), emulated cameras, an
+  ONVIF camera and an AI Port, none of which Network knows by those MACs.
 - **`X-Token` re-sent after every restart**: `used_tokens` is per process, so a fresh start sends
   the old single-use token again. The console still accepts the connection; check whether it
   should only be sent before adoption completes.
