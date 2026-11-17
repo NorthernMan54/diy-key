@@ -134,6 +134,16 @@ firmware: confirm each field and action from Protect's code or a live capture be
 
 ## Operations
 
+- **Resource baseline, Mac A, 2026-11-16** (`wasaga` on 037486e, up 34 h, 2 task workers):
+  - diy-key: 5.8 GB footprint, 55 CPU-min in 34 h (~2.7 % of a core on average, idle between
+    events); 770 events (~22/h): total median 5.1 s, p90 11.3 s; queue wait median 0, p90 1 ms;
+    tagging median 3.1 s; clip fetch wait median 2.2 s, p90 10.2 s (console side).
+  - diy-port (ONVIF, same Mac): ~1 GB, ~100 % of a core steady: avclient 46 % plus 4 video
+    ffmpeg ~12 % each (hw decode, 10 fps, JPEG/detect frames); the Go restreamer 8 %, 34 MB,
+    plus 6 audio ffmpeg (AAC -> Opus) at 0.6 % each.
+  - System (16 GB): load 2.5-4, 89 MB free, 5.5 GB compressed, swap 5.2 of 6.1 GB. An active
+    Screen Sharing session costs ~90 % of a core (`screensharingd`) plus WindowServer ~35 %.
+  - Memory is the limit for a second instance; CPU is not, unless diy-port grows.
 - **Second instance for a separate console** (3 ONVIF cameras behind diy-port), on Mac A:
   ~5.3 GB with every model; trim to ~2.5-4 GB (face, face enhance and LPR off, 1 task worker,
   VLM optional). Needs its own alias, MAC, device ID, GUID and PostgreSQL (`diykey_pg_init.sh`
