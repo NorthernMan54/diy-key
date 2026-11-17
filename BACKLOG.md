@@ -68,10 +68,14 @@ Open items for the macOS / Protect 7.3.70 work. Newest first within each section
 
 - `NL_PARSE` plurals and the firmware word linker (`DIYKEY_WORD_LINKER`, on Mac A since
   2026-11-11): search "trees" / "pickup" and check the log line `nl-search word linker: ... words`.
-- **Person re-ID search**: person rows carry `reidEmbedding` (OSNet 512-d zero-padded to 1024; 358
-  of 591 rows, 2026-11-16), but the "find this person" action wasn't found in the 7.3.70 UI and
-  no query on `reidEmbedding` has been seen. Find the UI entry point (Saul's extract, M/499374),
-  then catch the query with `log_statement='all'` and judge OSNet's matches.
+- ~~**Person re-ID search**~~ working 2026-11-16 (Saul, live on the console). UI: open a
+  recording, overlay menu -> ReID, pause ("Pause to start Edge AI analysis"), tap a person ->
+  "Showing N ReID Results" (last 24 h). Gate (swai.js): camera `smartDetectTypes` non-empty plus
+  an available `isSearchHost` aiprocessor (DIY Key - Flynn). Route `GET
+  /detection-reidentify/search/:tempId` (M/909595) searches with the tapped OSNet vector,
+  `minSimilarity = 100 - (20 + sensitivity/10)`. Matches are poor (box crop with background, not
+  the firmware's silhouette; loose cutoff; IR crops); measuring OSNet same/different-person
+  scores on stored rows is deferred.
 - `IMAGE_SEARCH`, and whether the 0.1 tag blend holds up with many rows and daytime crops.
 - Second Stage Verification on a real `RequestAI` (`second_verifier_mlabel`) task, with the
   firmware-style verdicts (2026-11-15: keep unless another type scores >= `DIYKEY_VERIFY_OVERRIDE`,
@@ -90,7 +94,16 @@ firmware: confirm each field and action from Protect's code or a live capture be
 - **Person attributes** (clothing type/colour, bags, hats, glasses): the firmware has PAR engines
   (`SmartPAR_lower_enhance.engine`, `SmartMM_*` in ubnt_ai_infer_agent). Find which Protect
   result fields carry them; we only send RAM++ tags today.
-- **Describe labels are all dropped** (found 2026-11-13 in Protect 7.3.70 `service.js`): in deep
+- **Describe labels: partly fixed 2026-11-16 (Saul).** `_describe_labels` now sends key:value
+  labels from the frame's tags via `ram_tagger.describe_labels` (the same labels as Protect's
+  convertRamTagsToLabels, plus `species`): gender, clothingType, upper/lowerClothingColor,
+  accessory, vehicleType + color, species. Not yet live-checked in Find Anything. Still
+  missing: vehicleBrand (no source), and the VLM-only keys (feet is dropped by Protect anyway):
+  head, carry, mobility, ageRange, facialHair, hairColor/Length, bodyStyle, vehicleModel/Year,
+  vehicleUse, animal breed/size/collar. Protect pushes its own prompts + JSON schema via
+  `changeDescribePrompts` (M/796872, per promptType person/face/vehicle/animal); DIY-Key doesn't
+  handle it yet. Answering those prompts with the VLM is the route to the rest.
+  Original finding: **Describe labels are all dropped** (found 2026-11-13 in Protect 7.3.70 `service.js`): in deep
   mode `_handle_describe` sends bare RAM++ tags (`package`, `box`, `man`) as `labels`, but
   Protect's `sanitizeSessionLabels` (M/594367:333) drops any label without a `:`. Send
   `key:value` labels instead. Protect maps the prompt's keys (`top`, `bottom`, `topColor`,
@@ -99,6 +112,12 @@ firmware: confirm each field and action from Protect's code or a live capture be
   `vehicleType`, `color`, `vehicleBrand`, `species`, ...). These labels feed the person/vehicle
   attribute filters in Find Anything's session search (deep analysis), whose values only show
   once some session has them.
+  Animals too (Saul, 2026-11-16): Protect's describe prompt has an `animal` type
+  (M/376658:34) with vocab `species` (dog, cat, bird, deer, horse, cow, rabbit, squirrel,
+  raccoon, fox, skunk, bear, coyote, rodent, reptile), `breed` (free), `color`, `size`
+  (small/medium/large), `collar` (true) (M/743534:210); all five are in `LABEL_NAMESPACES`
+  (M/594367:124). `species:<x>` is nearly free from `ram_tagger.agreed_species`; `size` could
+  come from the box; colour/breed/collar need the VLM.
 - **Package attribute** (person carrying a package): the only AI Key route is the
   Find Anything "Carrying" filter (box, package, bag, suitcase, umbrella, groceries, ladder,
   tool). `carry:package` is dropped (Protect's `carry` map only has box, bag, groceries, tool,

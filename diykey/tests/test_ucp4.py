@@ -1758,7 +1758,8 @@ class TestDeepDescribe(_StateDirTest):
         return post
 
     def test_describes_middle_object_frame(self):
-        post = self._run(tags=["person", "night"])
+        # Bare tags are dropped by Protect's sanitizeSessionLabels; only key:value labels go.
+        post = self._run(tags=["person", "man", "red shirt", "night"])
         self.assertEqual(post.call_args.args[0],
                          "https://10.0.0.5:7444/internal/aiprocessors/descriptions/t1")
         self.assertEqual(self.extract.call_args.args[1:], (1000, [3000]))  # median ts
@@ -1766,7 +1767,8 @@ class TestDeepDescribe(_StateDirTest):
         body = post.call_args.kwargs["json"]
         self.assertEqual(body, {"camera": "cam1", "event": "ev1", "pass": "close",
                                 "description": "A person walks.", "model": "diykey-vlm",
-                                "labels": ["person", "night"]})
+                                "labels": ["gender:male", "upperClothingColor:red",
+                                           "clothingType:shirt"]})
 
     def test_desc_embedding_needs_clip_and_opt_in(self):
         env = {"DIYKEY_CLIP": "1", "DIYKEY_DESC_EMBED": "1"}

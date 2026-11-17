@@ -304,6 +304,55 @@ def label_tag(tag):
     return noun in _LABEL_NOUNS or tag in UMBRELLA.values()
 
 
+
+# Deep-mode describe labels. Protect's sanitizeSessionLabels (M/594367:333, 7.3.70) drops any
+# label without "key:value" whose key is not in LABEL_NAMESPACES, so the bare RAM++ tags
+# _handle_describe used to send ("man", "red shirt") were all dropped (Saul 2026-11-16).
+# describe_labels emits the same key:value labels Protect's own convertRamTagsToLabels derives
+# from thumbnail tags (M/587258), plus animal `species` from the describe vocab (M/743534:210).
+# Vehicle and species labels need a detector box of that family in the frame, as Protect only
+# derives vehicleType/color for a vehicle object.
+_UPPER = {"shirt", "hoodie", "coat", "suit"}
+_LOWER = {"skirt", "pant", "short"}
+_ACCESSORIES = {"glasses", "hat", "backpack", "handbag", "helmet", "mask"}
+_VEHICLE_TYPES = {"bike": "bike", "bicycle": "bike", "motorcycle": "motorcycle", "sedan": "car",
+                  "suv": "suv", "truck": "truck", "van": "van", "bus": "bus"}
+DESCRIBE_SPECIES = {"dog", "cat", "bird", "deer", "horse", "cow", "rabbit", "squirrel",
+                    "raccoon", "fox", "skunk", "bear", "coyote", "rodent", "reptile"}
+
+
+def describe_labels(tags, families=()):
+    """Protect key:value labels for a frame's tags. families: the Protect object families
+    (person/vehicle/animal) the detector found in the frame."""
+    out = []
+    for tag in tags:
+        tag = str(tag).lower()
+        first, _, rest = tag.partition(" ")
+        colour, noun = (first, rest) if first in _LABEL_COLOURS and rest else (None, tag)
+        colour = "gray" if colour == "grey" else colour
+        found = []
+        if colour and (noun in _UPPER or noun == "clothing"):
+            found.append(f"upperClothingColor:{colour}")
+        if colour and noun in _LOWER:
+            found.append(f"lowerClothingColor:{colour}")
+        acc = "glasses" if noun == "glass" else noun
+        if acc in _ACCESSORIES:
+            found.append(f"accessory:{acc}")
+        if noun in _UPPER or noun in _LOWER:
+            found.append(f"clothingType:{noun}")
+        if noun in ("man", "boy"):
+            found.append("gender:male")
+        elif noun in ("woman", "girl"):
+            found.append("gender:female")
+        if "vehicle" in families and noun in _VEHICLE_TYPES:
+            found.append(f"vehicleType:{_VEHICLE_TYPES[noun]}")
+            if colour:
+                found.append(f"color:{colour}")
+        if "animal" in families and noun in DESCRIBE_SPECIES:
+            found.append(f"species:{noun}")
+        out.extend(x for x in found if x not in out)
+    return out
+
 # Protect names a class by family (personMeta/vehicleMeta) or by the concrete objectType of a
 # legacy roiMeta entry (car/truck/dog); normalise before the family/umbrella/species lookups.
 TYPE_ALIASES = {

@@ -1782,14 +1782,19 @@ def _describe_frame(console_host, mac_nosep, payload):
 
 
 def _describe_labels(img):
-    """ram_tagger tags (Protect's `labels`, sanitised on its side, M/402297:62) when
-    DIYKEY_RAM_MODEL loads, else None. Colour/night tags are kept: they are the search
-    vocabulary."""
+    """Protect key:value attribute labels (gender:male, upperClothingColor:red,
+    vehicleType:car, species:dog, ...) from the frame's ram_tagger tags when DIYKEY_RAM_MODEL
+    loads, else None. Bare tags are not sent: sanitizeSessionLabels drops any label without
+    a known "key:" (M/594367:333; see ram_tagger.describe_labels)."""
     tagger = _get_tagger()
     if not tagger:
         return None
     try:
-        labels = [t["tag"] for t in tagger.tag_frame(img)]
+        tags = [t["tag"] for t in tagger.tag_frame(img)]
+        families = {ram_tagger.normalise_object_type(t) for t in tags}
+        families |= {fam for fam, members in ram_tagger.FAMILY.items()
+                     if any(t in members for t in tags)}
+        labels = ram_tagger.describe_labels(tags, families)
     except Exception as e:  # noqa: BLE001 -- labels are optional
         log.warning("describe: tagging failed: %r", e)
         return None
