@@ -68,6 +68,10 @@ Open items for the macOS / Protect 7.3.70 work. Newest first within each section
 
 - `NL_PARSE` plurals and the firmware word linker (`DIYKEY_WORD_LINKER`, on Mac A since
   2026-11-11): search "trees" / "pickup" and check the log line `nl-search word linker: ... words`.
+- **Person re-ID search**: person rows carry `reidEmbedding` (OSNet 512-d zero-padded to 1024; 358
+  of 591 rows, 2026-11-16), but the "find this person" action wasn't found in the 7.3.70 UI and
+  no query on `reidEmbedding` has been seen. Find the UI entry point (Saul's extract, M/499374),
+  then catch the query with `log_statement='all'` and judge OSNet's matches.
 - `IMAGE_SEARCH`, and whether the 0.1 tag blend holds up with many rows and daytime crops.
 - Second Stage Verification on a real `RequestAI` (`second_verifier_mlabel`) task, with the
   firmware-style verdicts (2026-11-15: keep unless another type scores >= `DIYKEY_VERIFY_OVERRIDE`,
@@ -148,7 +152,7 @@ firmware: confirm each field and action from Protect's code or a live capture be
   ~5.3 GB with every model; trim to ~2.5-4 GB (face, face enhance and LPR off, 1 task worker,
   VLM optional). Needs its own alias, MAC, device ID, GUID and PostgreSQL (`diykey_pg_init.sh`
   not yet run for real); launchd setup needs sudo.
-- PostgreSQL statement logging is on for debugging (`ALTER SYSTEM RESET log_statement` to undo);
+- PostgreSQL statement logging is off (`log_statement = none`, checked 2026-11-16);
   `logs/postgres.log` is not rotated.
 - ~~3 macOS-only errors in `tests/test_run_all.py`~~ the full suite passes on macOS (420 tests,
   2026-11-11).
