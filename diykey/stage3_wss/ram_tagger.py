@@ -317,6 +317,10 @@ _LOWER = {"skirt", "pant", "short"}
 _ACCESSORIES = {"glasses", "hat", "backpack", "handbag", "helmet", "mask"}
 _VEHICLE_TYPES = {"bike": "bike", "bicycle": "bike", "motorcycle": "motorcycle", "sedan": "car",
                   "suv": "suv", "truck": "truck", "van": "van", "bus": "bus"}
+# Package attribute: Protect's describe `carry` map has no "package" (M/594367:246), but a
+# `carrying:` label passes the sanitizer unchanged, so a person frame with a parcel tag files
+# under Find Anything's Carrying filter as `carrying:package` (backlog "Package attribute").
+_PACKAGE_TAGS = {"package", "parcel", "box", "cardboard box", "cardboard", "carton"}
 DESCRIBE_SPECIES = {"dog", "cat", "bird", "deer", "horse", "cow", "rabbit", "squirrel",
                     "raccoon", "fox", "skunk", "bear", "coyote", "rodent", "reptile"}
 
@@ -348,6 +352,8 @@ def describe_labels(tags, families=()):
             found.append(f"vehicleType:{_VEHICLE_TYPES[noun]}")
             if colour:
                 found.append(f"color:{colour}")
+        if "person" in families and noun in _PACKAGE_TAGS:
+            found.append("carrying:package")
         if "animal" in families and noun in DESCRIBE_SPECIES:
             found.append(f"species:{noun}")
         out.extend(x for x in found if x not in out)

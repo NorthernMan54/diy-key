@@ -38,6 +38,12 @@ class DescribeLabelsTest(unittest.TestCase):
         self.assertEqual(ram_tagger.describe_labels(["grey bicycle"], {"vehicle"}),
                          ["vehicleType:bike", "color:gray"])
 
+    def test_package_needs_a_person(self):
+        self.assertEqual(ram_tagger.describe_labels(["man", "cardboard box", "package"],
+                                                    {"person"}),
+                         ["gender:male", "carrying:package"])
+        self.assertEqual(ram_tagger.describe_labels(["package"], set()), [])
+
     def test_no_duplicates(self):
         self.assertEqual(ram_tagger.describe_labels(["man", "boy"], {"person"}),
                          ["gender:male"])

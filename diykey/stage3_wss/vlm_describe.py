@@ -34,6 +34,7 @@ logs once and every call returns None. One inference at a time under a module
 lock: these models are hundreds of MB to GBs and not thread-safe on MPS.
 Any error returns None; the caller treats that as "no summary".
 """
+import json
 import logging
 import os
 import threading
@@ -121,15 +122,15 @@ def _mlx_backend(model_id):
     model, processor = load(model_id)
     config = load_config(model_id)
 
-    def run(rgb, prompt):
+    def run(rgb, prompt, system=None, max_tokens=None):
         # Single-tile like the firmware: hand the model a 448 square-bounded
         # image rather than letting a dynamic-resolution model tile 1280 px.
         pil = Image.fromarray(rgb)
         pil.thumbnail((TILE, TILE), Image.LANCZOS)
         formatted = apply_chat_template(processor, config,
-                                        SYSTEM + "\n" + prompt, num_images=1)
+                                        (system or SYSTEM) + "\n" + prompt, num_images=1)
         out = generate(model, processor, formatted, [pil],
-                       max_tokens=MAX_NEW_TOKENS, temperature=0.0,
+                       max_tokens=max_tokens or MAX_NEW_TOKENS, temperature=0.0,
                        repetition_penalty=REPETITION_PENALTY, verbose=False)
         return getattr(out, "text", out)
     return run
@@ -159,14 +160,17 @@ def _transformers_backend(model_path):
     gen = dict(max_new_tokens=MAX_NEW_TOKENS, do_sample=False,
                repetition_penalty=REPETITION_PENALTY)
 
-    def run(rgb, prompt):
+    def run(rgb, prompt, system=None, max_tokens=None):
         # One 448x448 bicubic tile, squashed (no aspect keep), as T.Resize did.
         tile = cv2.resize(rgb, (TILE, TILE), interpolation=cv2.INTER_CUBIC)
         x = torch.from_numpy(tile).permute(2, 0, 1).float() / 255.0
         x = ((x - mean) / std).unsqueeze(0).to(dev, dtype)
+        # Callers hold vlm_describe._lock, so swapping the system message is safe.
+        model.system_message = system or SYSTEM
         with torch.no_grad():
             # InternVL's chat() wants "<image>\n" or prepends it itself.
-            return model.chat(tok, x, "<image>\n" + prompt, gen)
+            return model.chat(tok, x, "<image>\n" + prompt,
+                              dict(gen, max_new_tokens=max_tokens or MAX_NEW_TOKENS))
     return run
 
 
@@ -227,3 +231,57 @@ def describe(bgr, backend=None, context=None, crop_top=True):
     except Exception as e:
         log.warning("VLM describe failed: %s", e)
         return None
+
+
+# Deep-mode attributes with Protect's own describe prompt (changeDescribePrompts, M/796872):
+# the prompt asks for {"description": ..., "labels": ["key:value", ...]} JSON, which needs
+# more room than the 128-token summary.
+ATTR_MAX_NEW_TOKENS = 384
+
+
+def parse_attribute_reply(text):
+    """["key:value", ...] from a describe-prompt reply, or [] when it is not that JSON. Small
+    VLMs wrap JSON in prose or ``` fences, so the outermost {...} is parsed."""
+    if not text:
+        return []
+    start, end = text.find("{"), text.rfind("}")
+    if start < 0 or end <= start:
+        return []
+    try:
+        obj = json.loads(text[start:end + 1])
+    except ValueError:
+        return []
+    labels = obj.get("labels") if isinstance(obj, dict) else None
+    out = []
+    for label in labels if isinstance(labels, list) else []:
+        if isinstance(label, str):
+            key, sep, val = label.strip().partition(":")
+            if sep and key and val and val.strip().lower() != key.lower():
+                label = f"{key.strip()}:{val.strip()}"
+                if label not in out:
+                    out.append(label)
+    return out
+
+
+def attributes(bgr, system_prompt, user_prompt, backend=None, max_tokens=None):
+    """Protect key:value labels for one object crop (BGR) using Protect's describe prompt;
+    [] when off, unavailable, unparseable or on any error. backend: as describe()."""
+    try:
+        if backend is None:
+            name = os.environ.get("DIYKEY_VLM", "off").strip().lower()
+            if name not in ("mlx", "transformers"):
+                return []
+            backend = _get_backend(name, os.environ.get("DIYKEY_VLM_MODEL", ""))
+            if backend is None:
+                return []
+        rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
+        with _lock:
+            raw = backend(rgb, user_prompt, system=system_prompt,
+                          max_tokens=max_tokens or ATTR_MAX_NEW_TOKENS)
+        labels = parse_attribute_reply(getattr(raw, "text", raw))
+        if not labels:
+            log.info("VLM attributes: no labels in reply %r", str(raw)[:300])
+        return labels
+    except Exception as e:
+        log.warning("VLM attributes failed: %s", e)
+        return []

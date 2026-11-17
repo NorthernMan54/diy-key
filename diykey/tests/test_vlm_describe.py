@@ -136,3 +136,31 @@ class ContextTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestAttributes(unittest.TestCase):
+    """vd.attributes/parse_attribute_reply: Protect's describe-prompt JSON."""
+
+    def test_parse_fenced_json_and_drop_placeholders(self):
+        text = ('Here you go:\n```json\n{"description": "a man", "labels": '
+                '["top:hoodie", "topColor:red", "species:species", "bare", "top:hoodie", 7]}\n```')
+        self.assertEqual(vd.parse_attribute_reply(text), ["top:hoodie", "topColor:red"])
+
+    def test_parse_garbage(self):
+        for text in (None, "", "no json", "{not json}", '{"labels": "x"}', "[1]"):
+            self.assertEqual(vd.parse_attribute_reply(text), [])
+
+    def test_attributes_passes_system_and_token_limit(self):
+        import numpy as np
+        backend = mock.Mock(return_value='{"description": "d", "labels": ["carry:box"]}')
+        out = vd.attributes(np.zeros((40, 20, 3), dtype=np.uint8), "SYS", "USER",
+                                      backend=backend)
+        self.assertEqual(out, ["carry:box"])
+        self.assertEqual(backend.call_args.args[1], "USER")
+        self.assertEqual(backend.call_args.kwargs, {"system": "SYS", "max_tokens": 384})
+
+    def test_attributes_error_is_empty(self):
+        import numpy as np
+        out = vd.attributes(np.zeros((4, 4, 3), dtype=np.uint8), "S", "U",
+                                      backend=mock.Mock(side_effect=RuntimeError("boom")))
+        self.assertEqual(out, [])

@@ -81,42 +81,22 @@ Open items for the macOS / Protect 7.3.70 work. Newest first within each section
 Gaps against a generic AI Key feature list (2026-11-12). That list is not from Protect or the
 firmware: confirm each field and action from Protect's code or a live capture before building.
 
-- **Person attributes** (clothing type/colour, bags, hats, glasses): the firmware has PAR engines
-  (`SmartPAR_lower_enhance.engine`, `SmartMM_*` in ubnt_ai_infer_agent). Find which Protect
-  result fields carry them; we only send RAM++ tags today.
-- **Describe labels: partly fixed 2026-11-16 (Saul).** `_describe_labels` now sends key:value
-  labels from the frame's tags via `ram_tagger.describe_labels` (the same labels as Protect's
-  convertRamTagsToLabels, plus `species`): gender, clothingType, upper/lowerClothingColor,
-  accessory, vehicleType + color, species. Not yet live-checked in Find Anything. Still
-  missing: vehicleBrand (no source), and the VLM-only keys (feet is dropped by Protect anyway):
-  head, carry, mobility, ageRange, facialHair, hairColor/Length, bodyStyle, vehicleModel/Year,
-  vehicleUse, animal breed/size/collar. Protect pushes its own prompts + JSON schema via
-  `changeDescribePrompts` (M/796872, per promptType person/face/vehicle/animal); DIY-Key doesn't
-  handle it yet. Answering those prompts with the VLM is the route to the rest.
-  Original finding: **Describe labels are all dropped** (found 2026-11-13 in Protect 7.3.70 `service.js`): in deep
-  mode `_handle_describe` sends bare RAM++ tags (`package`, `box`, `man`) as `labels`, but
-  Protect's `sanitizeSessionLabels` (M/594367:333) drops any label without a `:`. Send
-  `key:value` labels instead. Protect maps the prompt's keys (`top`, `bottom`, `topColor`,
-  `head`, `acc`, `carry`, `mobility`) and passes any other key in `LABEL_NAMESPACES` unchanged
-  (`gender`, `ageRange`, `clothingType`, `upperClothingColor`, `accessory`, `carrying`,
-  `vehicleType`, `color`, `vehicleBrand`, `species`, ...). These labels feed the person/vehicle
-  attribute filters in Find Anything's session search (deep analysis), whose values only show
-  once some session has them.
-  Animals too (Saul, 2026-11-16): Protect's describe prompt has an `animal` type
-  (M/376658:34) with vocab `species` (dog, cat, bird, deer, horse, cow, rabbit, squirrel,
-  raccoon, fox, skunk, bear, coyote, rodent, reptile), `breed` (free), `color`, `size`
-  (small/medium/large), `collar` (true) (M/743534:210); all five are in `LABEL_NAMESPACES`
-  (M/594367:124). `species:<x>` is nearly free from `ram_tagger.agreed_species`; `size` could
-  come from the box; colour/breed/collar need the VLM.
-- **Package attribute** (person carrying a package): the only AI Key route is the
-  Find Anything "Carrying" filter (box, package, bag, suitcase, umbrella, groceries, ladder,
-  tool). `carry:package` is dropped (Protect's `carry` map only has box, bag, groceries, tool,
-  ladder, umbrella, so even the firmware's own prompt can't produce it), but `carrying:package`
-  passes as is. So on a person session with a RAM++ `package`/`parcel`/`box` tag, send
-  `carrying:package` (or `carrying:box`). RAM tags on `thumbnailTags` never become `carrying:*`
-  (`convertRamTagsToLabels`, M/587258). Alarm Manager has no AI Key package option: its Package
-  trigger is camera-gated (below); the nearest is the AI Trigger (NLS, free text such as
-  "person carrying a package").
+- ~~**Person attributes**~~ folded into describe labels 2026-11-16: the firmware's PAR engines
+  (`SmartPAR_*`, `SmartMM_*`) are TensorRT (NVIDIA only); Protect's person/face describe prompts
+  ask for the same attributes, answered by the VLM path above.
+- **Describe labels: built 2026-11-16 (Saul), not live-checked.** Tags -> key:value labels
+  (`ram_tagger.describe_labels`: gender, clothingType, upper/lowerClothingColor, accessory,
+  vehicleType + color, species, carrying:package). `changeDescribePrompts` (M/796872) is stored
+  (`state/describe_prompts.json`, hash echoed as `featureFlags.describeConfigHash`, cleared on
+  factory reset); with `DIYKEY_DESCRIBE_ATTRS=1` deep describe runs Protect's prompt for the
+  frame's main person/vehicle/animal on its crop (+15 % margin) and sends the reply's labels
+  first. To verify live: does Protect send changeDescribePrompts to us (log
+  "changeDescribePrompts: N prompt(s)"), how good InternVL3.5-1B's JSON is ("describe
+  attributes (person): [...]" vs "no labels in reply"), and the extra seconds per describe.
+  Still missing: footwear (Protect drops it); vehicleBrand without the VLM path.
+- ~~**Package attribute**~~ built 2026-11-16 (Saul): `describe_labels` sends
+  `carrying:package` for a person frame with a package/parcel/box tag (Protect's `carry` map
+  has no package, but `carrying:` passes the sanitizer). Not live-checked in Find Anything.
 - **Support bundle**: `getSupportInfo` is ack-only. Return a bundle with our logs, queue stats and
   warm-up timings, in whatever shape Protect expects.
 - **`RequestTts`** is ack-only; the firmware ships `ui-tts-agent`. Find what Protect uses it for.

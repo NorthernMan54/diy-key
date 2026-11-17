@@ -612,7 +612,7 @@ HANDLED_ACTIONS = frozenset({
     "getInfo", "firmwareState", "updateFirmware", "networkStatus", "changeUserPassword",
     "changeAiInferAgentSettings", "diskInfo", "systemMetrics", "getTaskQueueInfo",
     "recognizeKeyFrames", "fastReverification", "enhanceImage", "enhanceImageGroup",
-    "RequestAI", "factoryReset", "restoreDefault", "reboot"})
+    "RequestAI", "factoryReset", "restoreDefault", "reboot", "changeDescribePrompts"})
 _ack_only_logged = set()
 # Tokens are single-use: send X-Token only the first time a value is seen. Module-level so a
 # factory reset can forget them (a re-adopt may legitimately reuse nothing, but stale entries
@@ -639,6 +639,7 @@ def _factory_reset(action):
              "ucp4 and nl-search; waiting for a fresh adopt POST (no tokenless reconnect)", action)
     config.clear_adopt_state(STATE_DIR)
     _used_tokens.clear()
+    _clear_describe_prompts()  # a new console must send its own (its hash would otherwise match)
     _reset_pending.set()
     ws = _nl_ws
     if ws is not None:
@@ -675,7 +676,11 @@ def handle_action(head, body, device_info):
             "featureFlags": {**(flags := _feature_flags()),
                              # Protect clamps anything but "deep" to basic (M/643837:72) and only
                              # sends deep to a capable key, so never echo "deep" we don't support.
-                             "aiMode": _ai_mode if flags["supportDeepMode"] else "basic"},
+                             "aiMode": _ai_mode if flags["supportDeepMode"] else "basic",
+                             # Protect re-sends changeDescribePrompts while this differs from
+                             # its configHash (M/796872); echo what we stored.
+                             **({"describeConfigHash": h} if (h := _describe_config_hash())
+                                else {})},
         }
     if action == "firmwareState":
         _latest_fw = (body or {}).get("latestFirmwareVersion") or _latest_fw
@@ -696,6 +701,9 @@ def handle_action(head, body, device_info):
     if action == "networkStatus":
         # Protect reads linkSpeedMbps (and ssid/rssi, wifi only).
         return {"ip": device_info["ip"], "connected": True, "linkSpeedMbps": 1000}
+    if action == "changeDescribePrompts":
+        _store_describe_prompts(body)
+        return {}
     if action == "changeUserPassword":
         _apply_pg_password((body or {}).get("passwordNew"))
         return {}
@@ -1741,6 +1749,107 @@ SEARCH_RERANK_URI = ":7445/search-reranking"
 DESCRIBE_MODEL = "diykey-vlm"
 PPE_MODEL = "ppe_mlabel"
 
+# Protect's describe prompts (changeDescribePrompts, M/796872 syncDescribePrompts): keyed by
+# describeComboKey ("person", "face", "face+person", "vehicle", "animal"); systemPrompt,
+# userPrompt and describeSchema arrive base64. Deep-mode describe answers them with the VLM on
+# the frame's main object when DIYKEY_DESCRIBE_ATTRS is on (off by default: a 1B VLM's JSON
+# is unproven live), adding Protect's VLM-only attributes (carry, mobility, ageRange,
+# bodyStyle, vehicleBrand/Model/Year/Use, animal breed/size/collar, ...).
+DESCRIBE_PROMPTS_FILE = "describe_prompts.json"
+_describe_prompts = None        # {"configHash": str, "prompts": {comboKey: {...decoded}}}
+# Main object first: a person frame uses the person prompt (schema person+face).
+_ATTR_FAMILIES = ("person", "vehicle", "animal")
+
+
+def _b64text(value):
+    import base64
+    try:
+        return base64.b64decode(value).decode("utf-8") if value else ""
+    except (ValueError, UnicodeDecodeError):
+        return ""
+
+
+def _store_describe_prompts(body):
+    """Decode and persist a changeDescribePrompts body."""
+    global _describe_prompts
+    body = body or {}
+    prompts = {}
+    for key, cfg in (body.get("describePrompts") or {}).items():
+        if not isinstance(cfg, dict):
+            continue
+        entry = {k: v for k, v in cfg.items()
+                 if k not in ("systemPrompt", "userPrompt", "describeSchema")}
+        entry["systemPrompt"] = _b64text(cfg.get("systemPrompt"))
+        entry["userPrompt"] = _b64text(cfg.get("userPrompt"))
+        entry["describeSchema"] = _b64text(cfg.get("describeSchema"))
+        prompts[str(key)] = entry
+    _describe_prompts = {"configHash": str(body.get("configHash") or ""), "prompts": prompts}
+    log.info("changeDescribePrompts: %d prompt(s) %s, configHash %s", len(prompts),
+             sorted(prompts), _describe_prompts["configHash"])
+    if STATE_DIR:
+        try:
+            with open(os.path.join(STATE_DIR, DESCRIBE_PROMPTS_FILE), "w") as f:
+                json.dump(_describe_prompts, f)
+        except OSError as e:
+            log.warning("changeDescribePrompts: could not save: %r", e)
+
+
+def _load_describe_prompts():
+    global _describe_prompts
+    if _describe_prompts is None and STATE_DIR:
+        try:
+            with open(os.path.join(STATE_DIR, DESCRIBE_PROMPTS_FILE)) as f:
+                _describe_prompts = json.load(f)
+        except (OSError, ValueError):
+            _describe_prompts = {}
+    return _describe_prompts or {}
+
+
+def _clear_describe_prompts():
+    global _describe_prompts
+    _describe_prompts = {}
+    if STATE_DIR:
+        try:
+            os.remove(os.path.join(STATE_DIR, DESCRIBE_PROMPTS_FILE))
+        except OSError:
+            pass
+
+
+def _describe_config_hash():
+    return _load_describe_prompts().get("configHash") or None
+
+
+def _attribute_labels(tagger, img):
+    """VLM key:value labels for the frame's main object with Protect's prompt for its type,
+    or [] (off, no prompt, nothing detected, VLM failure)."""
+    if not _truthy(os.environ.get("DIYKEY_DESCRIBE_ATTRS")):
+        return []
+    prompts = _load_describe_prompts().get("prompts") or {}
+    if not prompts or tagger is None:
+        return []
+    h, w = img.shape[:2]
+    best = {}
+    for label, _score, (x, y, bw, bh) in tagger.detect(img):
+        fam = next((f for f, members in ram_tagger.FAMILY.items() if label in members), None)
+        if fam and bw * bh > best.get(fam, (0, None))[0]:
+            best[fam] = (bw * bh, (x, y, bw, bh))
+    fam = next((f for f in _ATTR_FAMILIES if f in best and f in prompts), None)
+    if fam is None:
+        return []
+    cfg = prompts[fam]
+    if not cfg.get("systemPrompt") or not cfg.get("userPrompt"):
+        return []
+    x, y, bw, bh = best[fam][1]
+    margin = float(cfg.get("bboxMargin") or 0)
+    mx, my = (bw * margin, bh * margin) if margin < 1 else (margin, margin)
+    x0, y0 = max(0, int(x - mx)), max(0, int(y - my))
+    x1, y1 = min(w, int(x + bw + mx)), min(h, int(y + bh + my))
+    if x1 - x0 < 8 or y1 - y0 < 8:
+        return []
+    labels = vlm_describe.attributes(img[y0:y1, x0:x1], cfg["systemPrompt"], cfg["userPrompt"])
+    log.info("describe attributes (%s): %s", fam, labels)
+    return labels
+
 
 def _describe_frame(console_host, mac_nosep, payload):
     """The BGR still a describe task is about: the middle object of the first video that
@@ -1826,6 +1935,9 @@ def _handle_describe(console_host, mac_nosep, task_body):
         else:
             body["description"] = text
             labels = _describe_labels(img)
+            attrs = _attribute_labels(_get_tagger(), img)
+            if attrs:
+                labels = attrs + [x for x in labels or [] if x not in attrs]
             if labels:
                 body["labels"] = labels
             if clip_embed.enabled() and _truthy(os.environ.get("DIYKEY_DESC_EMBED")):

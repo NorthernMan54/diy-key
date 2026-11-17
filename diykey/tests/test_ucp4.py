@@ -2003,3 +2003,79 @@ class TestNlSearchReply(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestDescribePrompts(_StateDirTest):
+    """changeDescribePrompts (M/796872): Protect's own describe prompts, used for VLM attribute
+    labels in deep-mode describe when DIYKEY_DESCRIBE_ATTRS is on (Saul 2026-11-16)."""
+    DEVICE = TestHandleAction.DEVICE
+
+    def setUp(self):
+        super().setUp()
+        ucp4_client._describe_prompts = None
+        self.addCleanup(setattr, ucp4_client, "_describe_prompts", None)
+
+    @staticmethod
+    def _body():
+        import base64
+
+        def b64(text):
+            return base64.b64encode(text.encode()).decode()
+        return {"configHash": "abc123", "describePrompts": {
+            "person": {"systemPrompt": b64("SYS person"), "userPrompt": b64("Describe PERSON"),
+                       "temperature": 0, "bboxMargin": 0.15, "describeSchema": b64("{}")},
+            "vehicle": {"systemPrompt": b64("SYS vehicle"),
+                        "userPrompt": b64("Describe VEHICLE"), "bboxMargin": 0.15}}}
+
+    def test_stores_decodes_and_echoes_hash(self):
+        reply = ucp4_client.handle_action({"action": "changeDescribePrompts"}, self._body(),
+                                          dict(self.DEVICE))
+        self.assertEqual(reply, {})
+        ucp4_client._describe_prompts = None  # reload from disk
+        prompts = ucp4_client._load_describe_prompts()["prompts"]
+        self.assertEqual(prompts["person"]["systemPrompt"], "SYS person")
+        self.assertEqual(prompts["vehicle"]["userPrompt"], "Describe VEHICLE")
+        info = ucp4_client.handle_action({"action": "getInfo"}, {}, dict(self.DEVICE))
+        self.assertEqual(info["featureFlags"]["describeConfigHash"], "abc123")
+
+    def test_factory_reset_forgets_prompts(self):
+        ucp4_client._store_describe_prompts(self._body())
+        ucp4_client._factory_reset("factoryReset")
+        ucp4_client._describe_prompts = None
+        self.assertIsNone(ucp4_client._describe_config_hash())
+
+    def test_no_hash_before_prompts(self):
+        info = ucp4_client.handle_action({"action": "getInfo"}, {}, dict(self.DEVICE))
+        self.assertNotIn("describeConfigHash", info["featureFlags"])
+
+    def _attrs(self, detections, env="1"):
+        import numpy as np
+        ucp4_client._store_describe_prompts(self._body())
+        tagger = mock.Mock()
+        tagger.detect.return_value = detections
+        img = np.zeros((200, 400, 3), dtype=np.uint8)
+        with mock.patch.dict(os.environ, {"DIYKEY_DESCRIBE_ATTRS": env}), \
+                mock.patch.object(ucp4_client.vlm_describe, "attributes",
+                                  return_value=["top:hoodie", "carry:box"]) as attrs:
+            return ucp4_client._attribute_labels(tagger, img), attrs
+
+    def test_person_prompt_on_largest_person_crop(self):
+        labels, attrs = self._attrs([("car", 0.9, (0, 0, 300, 150)),
+                                     ("person", 0.8, (100, 50, 20, 40)),
+                                     ("person", 0.9, (200, 40, 40, 100))])
+        self.assertEqual(labels, ["top:hoodie", "carry:box"])
+        crop, system, user = attrs.call_args.args
+        self.assertEqual((system, user), ("SYS person", "Describe PERSON"))
+        self.assertEqual(crop.shape[:2], (130, 52))  # 40x100 box + 15 % margin, clipped at 200
+
+    def test_vehicle_prompt_without_person(self):
+        _labels, attrs = self._attrs([("truck", 0.9, (10, 10, 100, 50))])
+        self.assertEqual(attrs.call_args.args[1], "SYS vehicle")
+
+    def test_off_by_default_and_without_prompt(self):
+        labels, attrs = self._attrs([("person", 0.9, (200, 40, 40, 100))], env="0")
+        self.assertEqual(labels, [])
+        attrs.assert_not_called()
+        labels, attrs = self._attrs([("dog", 0.9, (200, 40, 40, 100))])  # no animal prompt
+        self.assertEqual(labels, [])
+        attrs.assert_not_called()
