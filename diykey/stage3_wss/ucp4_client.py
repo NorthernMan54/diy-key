@@ -49,6 +49,7 @@ import firmware  # noqa: E402
 import ram_tagger  # noqa: E402
 import nl_search  # noqa: E402
 import clip_embed  # noqa: E402
+import e5_embed  # noqa: E402
 import reid_model  # noqa: E402
 import second_verifier  # noqa: E402
 import face_recog  # noqa: E402
@@ -306,6 +307,13 @@ def _nl_search_reply(head, body, device_info):
     try:
         if action == "NL_PARSE":
             reply = nl_search.parse(body.get("querySentence") or "")
+            if e5_embed.wants(body.get("model")):
+                # Deep Understanding session search asks for e5 and rejects any other model
+                # or a non-384-d vector (M/409403 encodeSessionSearchQuery).
+                vec = e5_embed.query_embed(body.get("querySentence") or "")
+                reply["txtEmbed"] = vec or []
+                reply["model"] = e5_embed.MODEL_NAME
+                reply["dim"] = e5_embed.DIM
             log.info("NL_PARSE %r (model %s) -> tags %s types %s time %s embed %d",
                      body.get("querySentence"), body.get("model"),
                      {t["matchedWord"]: t["tags"] for t in reply["keyTags"]}, reply["objectTypes"],
@@ -1917,7 +1925,8 @@ def _handle_describe(console_host, mac_nosep, task_body):
     description is how a failure is reported: saveDescriptions then logs "leaving session for
     retry" and completes the task instead of waiting out the 30 s timeout (M/402297:42-52).
     descEmbedding fills smartDetectSessionsSearch.descEmbedding vector(384) (protocol.md §6),
-    so it is sent only when the embedder returns 384 values; CLIP is 768-d and is omitted."""
+    so it is sent only when the embedder returns 384 values: e5 (DIYKEY_E5=1), which session
+    search's query encoder also uses; CLIP is 768-d and is omitted."""
     payload = (task_body or {}).get("payload") or {}
     res_url = (task_body or {}).get("resUrl")
     body = {"camera": payload.get("camera"), "event": payload.get("event"),
@@ -1940,7 +1949,10 @@ def _handle_describe(console_host, mac_nosep, task_body):
                 labels = attrs + [x for x in labels or [] if x not in attrs]
             if labels:
                 body["labels"] = labels
-            if clip_embed.enabled() and _truthy(os.environ.get("DIYKEY_DESC_EMBED")):
+            vec = e5_embed.passage_embed(text)
+            if vec:
+                body["descEmbedding"] = vec
+            elif clip_embed.enabled() and _truthy(os.environ.get("DIYKEY_DESC_EMBED")):
                 vec = clip_embed.text_embed(text)
                 if vec and len(vec) == 384:
                     body["descEmbedding"] = vec

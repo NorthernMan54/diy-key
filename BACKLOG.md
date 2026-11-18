@@ -22,6 +22,21 @@ Open items for the macOS / Protect 7.3.70 work. Newest first within each section
   deep-capable. Find in Protect's code what gates both (`getInfo` feature flag or capability,
   camera setting, event type?). Until then no attribute labels reach Protect (species, carrying,
   ageRange, ...); species still goes out as an object tag.
+  Gate (Protect extract, 2026-11-18): the key must report `featureFlags.aiMode: "deep"` in
+  `getInfo`. Both `changeDescribePrompts` (M/966812:42, M/796872:107) and the describe dispatch
+  (M/696317 isDeepMode) check it. Protect sets it with `changeAiInferAgentSettings {modelMode:
+  "deep"}` (M/387031) only if the NVR has `aiFeatureSettings.deepUnderstandingSettings.enabled`
+  (M/667685) and the key advertises `supportDeepMode`/`supportVlm` (M/387031:24). DIY-Key
+  advertises them only with `DIYKEY_DEEP_MODE=1` and a working `DIYKEY_VLM`. Check on Mac A:
+  `grep -o "'supportDeepMode': [A-Za-z]*\|'aiMode': '[a-z]*'" logs/diykey.log | sort | uniq -c`
+  and for `modelMode` in `changeAiInferAgentSettings`. Saul's log has only `aiMode: basic`.
+- **Session search needs e5** (2026-11-18, built, not live-checked): Protect's session search
+  encodes the query with `NL_PARSE {model: multilingual-e5-small}` and drops any reply that isn't
+  that model at 384-d (M/409403). DIY-Key answered with CLIP, so `/detection-sessions/search`
+  returned `{"sessions":[]}`. `DIYKEY_E5=1` now answers e5 queries and adds e5 `descEmbedding` to
+  describe replies. Sessions described before it have no vector. The session-search UI is also
+  gated on an owner email ending `@ui.com`/`@ubnt.com` (`isInternalOwner`); the server isn't.
+  The VLM labels include junk (`accessory:none`, `accessory:red scarf`) to filter.
 - **`segment-video` is ack-only**: Protect sends `RequestAI` `:7445/segment-video` {cameraId,
   timestamp, videoUrl (10 s ubv export)} with a `camera-upload` resUrl; 13 since 2026-11-16 on
   Driveway, before deep mode was on. We reply `{}` and upload nothing. Find what it is for

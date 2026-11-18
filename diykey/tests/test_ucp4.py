@@ -1779,6 +1779,14 @@ class TestDeepDescribe(_StateDirTest):
         self.assertNotIn("descEmbedding", self._run(env={"DIYKEY_DESC_EMBED": "1"},
                                                     vec=[1.0]).call_args.kwargs["json"])
 
+    def test_desc_embedding_from_e5_first(self):
+        # e5 fills descEmbedding with no CLIP opt-in; it is the space session search queries in.
+        with mock.patch.object(ucp4_client.e5_embed, "passage_embed",
+                               mock.Mock(return_value=[0.1] * 384)) as pe:
+            body = self._run(vec=[0.5] * 384).call_args.kwargs["json"]
+        self.assertEqual(body["descEmbedding"], [0.1] * 384)
+        self.assertEqual(pe.call_args.args, ("A person walks.",))
+
     def test_desc_embedding_wrong_dimension_is_omitted(self):
         env = {"DIYKEY_CLIP": "1", "DIYKEY_DESC_EMBED": "1"}
         body = self._run(env=env, vec=[0.5] * 768).call_args.kwargs["json"]
@@ -1987,6 +1995,34 @@ class TestSegmentImage(unittest.TestCase):
 
 
 class TestNlSearchReply(unittest.TestCase):
+    PARSED = {"keyTags": [], "objectTypes": [], "txtEmbed": [0.2] * 768}
+
+    def _parse(self, model, vec):
+        with mock.patch.object(ucp4_client.nl_search, "parse",
+                               return_value=dict(self.PARSED)), \
+                mock.patch.object(ucp4_client.e5_embed, "query_embed",
+                                  mock.Mock(return_value=vec)) as qe:
+            reply = ucp4_client._nl_search_reply(
+                {"action": "NL_PARSE"}, {"querySentence": "bird", "model": model}, {})
+        return reply, qe
+
+    def test_nl_parse_e5_for_session_search(self):
+        # Live 2026-11-18 15:11: Protect rejected the CLIP reply ("NL_PARSE ran 'clip-ViT-L-14'
+        # but 'multilingual-e5-small' was requested"), so session search found nothing.
+        reply, qe = self._parse("multilingual-e5-small", [0.3] * 384)
+        self.assertEqual(qe.call_args.args, ("bird",))
+        self.assertEqual((reply["model"], reply["dim"], reply["txtEmbed"]),
+                         ("multilingual-e5-small", 384, [0.3] * 384))
+
+    def test_nl_parse_e5_unavailable_sends_empty_vector(self):
+        reply, _ = self._parse("multilingual-e5-small@1", None)
+        self.assertEqual((reply["model"], reply["txtEmbed"]), ("multilingual-e5-small", []))
+
+    def test_nl_parse_clip_unchanged(self):
+        reply, qe = self._parse("clip-ViT-L-14", [0.3] * 384)
+        qe.assert_not_called()
+        self.assertEqual(reply, self.PARSED)
+
     def test_image_search_absolutises_img_uri(self):
         resp = mock.Mock(status_code=200, content=b"")
         device = {"mac_nosep": "fec", "console_host": "10.0.0.5"}
