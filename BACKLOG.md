@@ -15,6 +15,14 @@ Open items for the macOS / Protect 7.3.70 work. Newest first within each section
 
 ## Investigate
 
+- **Deep mode sends no describe requests** (Mac A, deep mode on in Protect from 2026-11-16
+  21:40): in 36 h no `RequestAI` to `:7968/describe` or `:7445/generate-embeddings`, so
+  `DIYKEY_DESCRIBE_ATTRS` never runs. Find in Protect's code what sends them (camera setting,
+  event type, feature flag?).
+- **`segment-video` is ack-only**: Protect sends `RequestAI` `:7445/segment-video` {cameraId,
+  timestamp, videoUrl (10 s ubv export)} with a `camera-upload` resUrl; 13 since 2026-11-16 on
+  Driveway, before deep mode was on. We reply `{}` and upload nothing. Find what it is for
+  (Locate? tap-to-select?) and what the upload should hold.
 - **Summary subject**: the VLM describes parked cars as part of the action ("passing by a red
   car"). Try a snapshot with the triggering object outlined (magenta, thin; prompt names the
   outline), offline on saved clips first, plain vs boxed side by side.
@@ -67,9 +75,8 @@ Open items for the macOS / Protect 7.3.70 work. Newest first within each section
   the firmware's silhouette; loose cutoff; IR crops); measuring OSNet same/different-person
   scores on stored rows is deferred.
 - `IMAGE_SEARCH`, and whether the 0.1 tag blend holds up with many rows and daytime crops.
-- Second Stage Verification on a real `RequestAI` (`second_verifier_mlabel`) task, with the
-  firmware-style verdicts (2026-11-15: keep unless another type scores >= `DIYKEY_VERIFY_OVERRIDE`,
-  kept confidence min(det% + max(2, prob%/20), 99), "skipped" without a frame).
+- ~~Second Stage Verification on a real `RequestAI`~~ verified 2026-11-16/17: 18 verdicts,
+  14 kept with the firmware confidence, 3 weak other types kept, 1 person -> vehicle at 0.92.
 - Description colour from the tracked vehicle's crop (2026-11-15): a car passing the parked red
   car on Driveway should no longer read "Red car, ...".
 - `thumbnailTags` rows for image (retroactive) tasks, not just video tasks.
