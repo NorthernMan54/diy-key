@@ -17,8 +17,11 @@ Open items for the macOS / Protect 7.3.70 work. Newest first within each section
 
 - **Deep mode sends no describe requests** (Mac A, deep mode on in Protect from 2026-11-16
   21:40): in 36 h no `RequestAI` to `:7968/describe` or `:7445/generate-embeddings`, so
-  `DIYKEY_DESCRIBE_ATTRS` never runs. Find in Protect's code what sends them (camera setting,
-  event type, feature flag?).
+  `DIYKEY_DESCRIBE_ATTRS` never runs. Protect has never sent `changeDescribePrompts` either
+  (no `state/describe_prompts.json`, checked 2026-11-18), so it seems not to treat this AI Key as
+  deep-capable. Find in Protect's code what gates both (`getInfo` feature flag or capability,
+  camera setting, event type?). Until then no attribute labels reach Protect (species, carrying,
+  ageRange, ...); species still goes out as an object tag.
 - **`segment-video` is ack-only**: Protect sends `RequestAI` `:7445/segment-video` {cameraId,
   timestamp, videoUrl (10 s ubv export)} with a `camera-upload` resUrl; 13 since 2026-11-16 on
   Driveway, before deep mode was on. We reply `{}` and upload nothing. Find what it is for
