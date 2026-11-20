@@ -105,7 +105,7 @@ restart           touch to restart DIY-Key
 | `DIYKEY_FW_VERSION`, `DIYKEY_DISCOVERY_FW_VERSION` | Factory firmware; a simulated update pins newer in `state/fw_version.json` |
 | `DIYKEY_FW_DIR`, `DIYKEY_FW_DOWNLOAD`, `DIYKEY_FAKE_UPDATE_S` | Where offered firmware is kept (default `~/.diy-key/firmware`), whether, and how long the fake install takes |
 | `DIYKEY_PG`, `DIYKEY_PG_BIN` | `0` to run without the instance's PostgreSQL; Homebrew `postgresql@17` bin dir |
-| `DIYKEY_DEBUG`, `DIYKEY_LOG_MAX_MB`, `DIYKEY_LOG_KEEP` | Logging |
+| `DIYKEY_DEBUG`, `DIYKEY_DEBUG_LOGGERS`, `DIYKEY_LOG_MAX_MB`, `DIYKEY_LOG_KEEP` | Logging (`DIYKEY_DEBUG_LOGGERS`: comma list of loggers, e.g. `diykey.lpr`, at debug) |
 
 AI Key Advanced alarms (Alarm Manager rules with a natural-language sentence and a threshold) need
 `DIYKEY_CLIP=1`, `DIYKEY_RAM_MODEL`, `DIYKEY_RAM_TAGS` and the nl-search connection; startup logs

@@ -147,6 +147,11 @@ def apply_logging(debug=False):
     for handler in logging.getLogger().handlers:
         if not any(isinstance(f, RedactFilter) for f in handler.filters):
             handler.addFilter(RedactFilter())
+    # DIYKEY_DEBUG_LOGGERS=diykey.lpr,diykey.x: debug for just those loggers
+    # (handlers have no level, so their records pass at INFO root).
+    for name in os.environ.get("DIYKEY_DEBUG_LOGGERS", "").split(","):
+        if name.strip():
+            logging.getLogger(name.strip()).setLevel(logging.DEBUG)
 
 
 def sysid_int(cfg):

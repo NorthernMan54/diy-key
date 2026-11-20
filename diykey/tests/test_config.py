@@ -185,3 +185,15 @@ class TestFirmwarePin(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestDebugLoggers(unittest.TestCase):
+    def test_named_loggers_get_debug(self):
+        import logging
+        from unittest import mock
+        from diykey.core import config
+        with mock.patch.dict(os.environ, {"DIYKEY_DEBUG_LOGGERS": "diykey.t1, diykey.t2"}):
+            config.apply_logging()
+        self.assertEqual(logging.getLogger("diykey.t1").level, logging.DEBUG)
+        self.assertEqual(logging.getLogger("diykey.t2").level, logging.DEBUG)
+        self.assertEqual(logging.getLogger("diykey.t3").level, logging.NOTSET)
