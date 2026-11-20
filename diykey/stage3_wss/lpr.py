@@ -35,6 +35,11 @@ PLATE_TRACKER_OFFSET = 200000
 # aren't reported (pi-port live: every read under 75 px was wrong).
 PLATE_SCORE_THRESH = float(os.environ.get("DIYKEY_LPR_THRESH", "0.5"))
 PLATE_MIN_PX = int(os.environ.get("DIYKEY_LPR_MIN_PX") or 60)
+# OCR floor: a plate whose least certain character scores under this is not reported. The
+# detector finds plate *shapes* even when IR flare or blur leaves the characters unreadable,
+# and the OCR always emits some text; one unreadable character makes the whole read wrong,
+# so the weakest character decides (2026-11-19: an IR-flared Driveway plate was sent).
+PLATE_OCR_MIN = float(os.environ.get("DIYKEY_LPR_OCR_MIN") or 0.4)
 # enrich.py CROP_MARGIN 1.3 grows the box 15% each side (the frame can lag the box).
 CROP_MARGIN = 0.15
 TOP_K = 5
@@ -170,12 +175,32 @@ def _alpr_reader(crop):
     for r in results:
         if r.detection.confidence < PLATE_SCORE_THRESH or not r.ocr or not r.ocr.text:
             continue
-        conf = r.ocr.confidence
-        conf = float(np.mean(conf)) if isinstance(conf, (list, tuple, np.ndarray)) else float(conf)
+        conf = ocr_confidence(r.ocr.text, r.ocr.confidence)
+        if conf is None:
+            log.debug("plate %r dropped: OCR character confidence under %.2f (%s)",
+                      r.ocr.text, PLATE_OCR_MIN, r.ocr.confidence)
+            continue
         b = r.detection.bounding_box
         out.append((r.ocr.text, min(float(r.detection.confidence), conf),
                     (int(b.x1), int(b.y1), int(b.x2), int(b.y2))))
     return out
+
+
+def ocr_confidence(text, probs, floor=None):
+    """Mean OCR confidence over the plate's own characters, or None when any of them is
+    under `floor` (default PLATE_OCR_MIN) or there are none.
+
+    fast-plate-ocr returns one probability per model slot, trailing pad slots included, and
+    strips the pad from the text; the pad slots are near-certain, so averaging them all lets
+    an unreadable plate look confident. Only the first len(text) slots are the characters."""
+    floor = PLATE_OCR_MIN if floor is None else floor
+    if isinstance(probs, (list, tuple, np.ndarray)):
+        chars = [float(p) for p in list(probs)[:len(text or "")]]
+    else:
+        chars = [float(probs)] if text else []
+    if not chars or min(chars) < floor:
+        return None
+    return float(np.mean(chars))
 
 
 def _crop(img, coord, margin):

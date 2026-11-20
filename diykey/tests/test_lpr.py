@@ -166,5 +166,23 @@ class BuildLprTest(unittest.TestCase):
         self.assertEqual(len(cm.output), 1)
 
 
+class OcrConfidenceTest(unittest.TestCase):
+    def test_flared_plate_with_one_unreadable_char_is_dropped(self):
+        # IR flare: the detector found the plate, but one character is a guess.
+        self.assertIsNone(lpr.ocr_confidence("ABC123", [0.95, 0.9, 0.12, 0.9, 0.9, 0.9], 0.4))
+
+    def test_pad_slots_do_not_count(self):
+        # Trailing pad slots are near-certain; only the text's own slots are averaged.
+        probs = [0.5, 0.6, 0.7, 0.99, 0.99, 0.99, 0.99]
+        self.assertAlmostEqual(lpr.ocr_confidence("ABC", probs, 0.4), 0.6)
+        self.assertIsNone(lpr.ocr_confidence("ABC", [0.3, 0.99, 0.99, 0.99], 0.4))
+
+    def test_scalar_and_empty(self):
+        self.assertEqual(lpr.ocr_confidence("ABC", 0.8, 0.4), 0.8)
+        self.assertIsNone(lpr.ocr_confidence("ABC", 0.2, 0.4))
+        self.assertIsNone(lpr.ocr_confidence("", [0.9], 0.4))
+        self.assertIsNone(lpr.ocr_confidence("ABC", [], 0.4))
+
+
 if __name__ == "__main__":
     unittest.main()
