@@ -12,7 +12,8 @@ up/service-expanded/modules):
    namesTopK, objectType, topKCandidate: [{name, confidence}], color?, vehicleType?}},
    lprSnapshots: [snapshotSchema], inferMs, preProcessMs, status, timeElapsedMs}
 lprAttrs is keyed by the *vehicle* trackerId because Protect saves the plate onto the
-smart-detect object whose attributes.trackerId matches (M/785414:36-58).
+smart-detect object whose attributes.trackerId matches (M/785414:36-58), and repeated under
+the plate snapshot's trackerID, whose entry becomes the plate object's attributes (:88-94).
 """
 import importlib.util
 import logging
@@ -342,6 +343,10 @@ def build_lpr(camera_id, event_id, frames, vehicle_meta, start_ms=None, reader=N
             entry.update(va)
         attrs[str(tid)] = entry
         snap_id = tid + PLATE_TRACKER_OFFSET
+        # Protect gives the plate's own smartDetectObject the attributes of
+        # lprAttrs[snapshot trackerID] (M/785414:88-94), so the plate number has to sit under
+        # the snapshot id too, or the plate record is saved with no name.
+        attrs[str(snap_id)] = entry
         wall = int(start_ms) + int(b["ts"]) if start_ms is not None else int(b["ts"])
         snaps.append({
             "clockBestMonotonic": int(b["ts"]),

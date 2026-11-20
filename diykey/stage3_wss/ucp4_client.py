@@ -61,7 +61,8 @@ from ucp4_wire import (  # noqa: E402,F401 -- re-exported for callers and tests
     RECORD_FORMAT_JSON, RECORD_FORMAT_RAW, RECORD_TYPE_BODY, RECORD_TYPE_HEAD,
     pack_message, pack_record, unpack_all_records)
 from task_meta import (  # noqa: E402,F401
-    EPOCH_MS_MIN, _flatten_meta, _meta_start_ms, _meta_wall_ms, _roi_derived_metas)
+    EPOCH_MS_MIN, _event_vehicles, _flatten_meta, _meta_start_ms, _meta_wall_ms,
+    _roi_derived_metas)
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
@@ -1443,6 +1444,7 @@ def _wanted_metas(body):
         vehicle = _flatten_meta(body.get("vehicleMeta"))
         if not vehicle and "vehicle" in derived:
             vehicle = derived["vehicle"]
+        vehicle = _event_vehicles(body, vehicle)
         if vehicle:
             metas["lpr"] = vehicle
     return metas

@@ -69,6 +69,33 @@ def _roi_derived_metas(body):
     return out
 
 
+def _event_vehicles(body, vehicle):
+    """vehicleMeta entries for the event's own vehicles: those whose trackerId is a vehicle
+    in thumbnailMeta (the objects the event is about, the ones Protect saves as the event's
+    smartDetectObjects and smartDetectTrack). vehicleMeta and roiMeta also list every other
+    vehicle in view under the camera's tracker ids, so a parked car's plate would be read on
+    every event and saved under an id that matches none of the event's records (2026-11-20
+    Driveway: plates came from parked tracker 114 on events whose vehicle was 406..734, and
+    Protect, which copies the plate by trackerId, M/785414:36-58, showed no number).
+    Without a thumbnailMeta (the schema makes it optional) the list is returned as is."""
+    thumbs = _flatten_meta(body.get("thumbnailMeta"))
+    if not thumbs:
+        return vehicle
+    own = set()
+    for e in thumbs:
+        r = e["roi"]
+        otype = r.get("objectType") or (r.get("attributes") or {}).get("objectType")
+        tid = r.get("trackerId", r.get("trackerID"))
+        if str(otype or "").lower() in _ROI_VEHICLE and tid is not None:
+            own.add(str(tid))
+    kept = [e for e in vehicle or []
+            if str(e["roi"].get("trackerId", e["roi"].get("trackerID"))) in own]
+    if len(kept) != len(vehicle or []):
+        log.info("event %s: plates read for vehicle(s) %s only; skipped %d other vehicle roi(s)",
+                 body.get("event"), sorted(own) or "none", len(vehicle or []) - len(kept))
+    return kept
+
+
 def _meta_start_ms(metas, start):
     """start_ms for face_recog/lpr: None when the meta ts are epoch ms, so their
     clockBestWall is the ts itself, the same epoch ms RAM sends as keyMomentMs; the clip

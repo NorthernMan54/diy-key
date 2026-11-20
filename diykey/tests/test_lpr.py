@@ -76,6 +76,9 @@ class BuildLprTest(unittest.TestCase):
         self.assertEqual(d["confidenceLevel"], 90)
         a = j["lprAttrs"]["7"]
         self.assertEqual(a["matchedName"], "ABC123")
+        # Protect names the plate object from lprAttrs[snapshot trackerID] (M/785414:88-94).
+        self.assertEqual(j["lprAttrs"][str(7 + lpr.PLATE_TRACKER_OFFSET)]["matchedName"],
+                         "ABC123")
         self.assertEqual(a["namesTopK"], ["ABC123"])
         self.assertEqual(a["objectType"], "vehicle")
         self.assertEqual(a["topKCandidate"], [{"name": "ABC123", "confidence": 90.0}])

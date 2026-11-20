@@ -1120,6 +1120,33 @@ class TestRecognizeFaceLpr(_RecognizeTest):
         # vehicleMeta also explicit here.
         self.assertEqual(self.lpr.call_args.args[3][0]["roi"]["trackerId"], 9)
 
+    def _thumb(self, tid, otype="vehicle"):
+        return {"ts": self.START + 1000,
+                "roi": [{"name": "", "coord": [5, 6, 7, 8], "trackerId": tid, "confidence": 90,
+                         "attributes": {"objectType": otype}, "objectType": otype}]}
+
+    def test_plates_only_for_the_events_own_vehicle(self):
+        # Live 2026-11-20 Driveway: vehicleMeta carried parked tracker 114 as well as the
+        # event's vehicle; only the thumbnailMeta vehicle is the event's.
+        metas = self._metas()
+        metas["vehicleMeta"].append({"ts": self.START + 1000, "roi": {
+            "coord": [50, 60, 70, 80], "objectType": "vehicle", "trackerId": 114}})
+        with self.assertLogs("ucp4-client", "INFO") as cm:
+            self._run(self._body(thumbnailMeta=[self._thumb(9)], **metas), self.ON, self.BOTH)
+        self.assertEqual([m["roi"]["trackerId"] for m in self.lpr.call_args.args[3]], [9])
+        self.assertTrue(any("skipped 1 other vehicle" in m for m in cm.output))
+
+    def test_no_plates_when_the_event_has_no_vehicle(self):
+        # A person event with a parked car in view: the car's plate is not this event's.
+        self._run(self._body(thumbnailMeta=[self._thumb(5, "person")], **self._metas()),
+                  self.ON, self.BOTH)
+        self.lpr.assert_not_called()
+        self.face.assert_called_once()
+
+    def test_all_vehicles_without_thumbnail_meta(self):
+        self._run(self._body(**self._metas()), self.ON, self.BOTH)
+        self.assertEqual([m["roi"]["trackerId"] for m in self.lpr.call_args.args[3]], [9])
+
     def test_model_failure_keeps_other_part(self):
         plate = ({"cameraId": "cam1", "eventId": "ev1", "lprSnapshots": []}, {})
         ucp4_client._ai_settings.update(self.BOTH)
