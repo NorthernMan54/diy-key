@@ -76,30 +76,19 @@ class BuildLprTest(unittest.TestCase):
         self.assertEqual(d["confidenceLevel"], 90)
         a = j["lprAttrs"]["7"]
         self.assertEqual(a["matchedName"], "ABC123")
-        # Protect names the plate object from lprAttrs[snapshot trackerID] (M/785414:88-94).
-        self.assertEqual(j["lprAttrs"][str(7 + lpr.PLATE_TRACKER_OFFSET)]["matchedName"],
-                         "ABC123")
+        # Only the vehicle carries the plate: no separate plate object, so no entry for it.
+        self.assertEqual(list(j["lprAttrs"]), ["7"])
         self.assertEqual(a["namesTopK"], ["ABC123"])
         self.assertEqual(a["objectType"], "vehicle")
         self.assertEqual(a["topKCandidate"], [{"name": "ABC123", "confidence": 90.0}])
         self.assertEqual(a["color"]["val"], "red")  # BGR (0,0,200) is red
         self.assertNotIn("vehicleType", a)          # objectType alone gives no type
-        s = j["lprSnapshots"][0]
-        self.assertEqual(set(s), {"clockBestMonotonic", "clockBestWall", "smartDetectHeatmap",
-                                  "smartDetectSnapshot", "smartDetectSnapshotName",
-                                  "smartDetectSnapshotType", "trackerID"})
-        self.assertEqual(s["smartDetectSnapshotType"], "licensePlate")
-        self.assertEqual(s["smartDetectSnapshot"], f"/tmp/cam1_{7 + lpr.PLATE_TRACKER_OFFSET}.jpg")
-        # The plate card's label in Protect is the snapshot name (M/482984:245).
-        self.assertEqual((s["smartDetectHeatmap"], s["smartDetectSnapshotName"]), ("", "ABC123"))
+        # No plate snapshot: Protect would save it as a licensePlate object that is never
+        # linked to the plate's named group, an unnamed second card (Driveway 2026-11-21).
+        self.assertEqual(j["lprSnapshots"], [])
+        self.assertEqual(jpegs, {})
         # attributes.confidence is the card's confidence; no roi confidence -> the plate read's.
         self.assertEqual(a["confidence"], 90)
-        self.assertEqual(j["lprAttrs"][str(7 + lpr.PLATE_TRACKER_OFFSET)]["confidence"], 90)
-        self.assertEqual(s["clockBestMonotonic"], 1000)
-        self.assertEqual(s["clockBestWall"], 1_700_000_001_000)
-        self.assertEqual(s["trackerID"], 7 + lpr.PLATE_TRACKER_OFFSET)
-        self.assertEqual(list(jpegs), [str(7 + lpr.PLATE_TRACKER_OFFSET)])
-        self.assertTrue(jpegs[str(7 + lpr.PLATE_TRACKER_OFFSET)].startswith(b"\xff\xd8"))
 
     def test_best_read_per_tracker(self):
         frames = {1: _frame(), 2: _frame(), 3: _frame()}
@@ -110,11 +99,8 @@ class BuildLprTest(unittest.TestCase):
         self.assertEqual(j["lprAttrs"]["5"]["matchedName"], "AB1284")
         self.assertEqual(j["lprAttrs"]["5"]["namesTopK"], ["AB1284", "AB1234"])
         self.assertEqual(j["lprAttrs"]["9"]["matchedName"], "ZZZ999")
-        snaps = {s["trackerID"]: s for s in j["lprSnapshots"]}
-        off = lpr.PLATE_TRACKER_OFFSET
-        self.assertEqual(set(snaps), {5 + off, 9 + off})
-        self.assertEqual(snaps[5 + off]["clockBestWall"], 2)  # no start_ms: ts
-        self.assertEqual(set(jpegs), {str(5 + off), str(9 + off)})
+        self.assertEqual(set(j["lprAttrs"]), {"5", "9"})
+        self.assertEqual((j["lprSnapshots"], jpegs), ([], {}))
 
     def test_narrow_plate_and_non_vehicle_skipped(self):
         frames = {1: _frame(), 2: _frame()}
@@ -149,13 +135,12 @@ class BuildLprTest(unittest.TestCase):
         self.assertEqual(attrs["vehicleType"], {"val": "suv", "confidence": 88})
         self.assertEqual(attrs["color"], {"val": "gray", "confidence": 95})  # silver -> gray
 
-    def test_vehicle_keeps_camera_confidence_plate_gets_read_confidence(self):
+    def test_vehicle_keeps_camera_confidence(self):
         m = _meta(1, 3)
         m["roi"]["attributes"] = {"confidence": 91}
         j, _ = lpr.build_lpr("c", "e", {1: _frame()}, [m],
                              reader=_reader([[("CLVA684", 0.874, BOX)]]))
         self.assertEqual(j["lprAttrs"]["3"]["confidence"], 91)
-        self.assertEqual(j["lprAttrs"][str(3 + lpr.PLATE_TRACKER_OFFSET)]["confidence"], 87)
         self.assertEqual(j["lprAttrs"]["3"]["matchedName"], "CLVA684")
 
     def test_vehicle_type_from_label(self):

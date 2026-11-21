@@ -12,8 +12,10 @@ up/service-expanded/modules):
    namesTopK, objectType, topKCandidate: [{name, confidence}], color?, vehicleType?}},
    lprSnapshots: [snapshotSchema], inferMs, preProcessMs, status, timeElapsedMs}
 lprAttrs is keyed by the *vehicle* trackerId because Protect saves the plate onto the
-smart-detect object whose attributes.trackerId matches (M/785414:36-58), and repeated under
-the plate snapshot's trackerID, whose entry becomes the plate object's attributes (:88-94).
+smart-detect object whose attributes.trackerId matches (M/785414:36-58). lprSnapshots is
+always []: each snapshot would become a separate licensePlate object (:66-128), which Protect
+never links to the plate's named group (only vehicles are grouped, M/331285), so it showed as
+an unnamed second card on the License Plates page.
 """
 import importlib.util
 import logging
@@ -27,9 +29,8 @@ log = logging.getLogger("diykey.lpr")
 
 COORD_END = 1000  # roi coords are normalised 0..1000 (M/346308:76-80)
 
-# Snapshot trackerID = vehicle trackerId + this. Unknown whether the real firmware reuses the
-# vehicle id for the plate snapshot; the offset keeps the plate JPEG's multipart key from
-# colliding with a vehicle snapshot of the same tracker. lprAttrs stays on the vehicle id.
+# Plate descriptor trackerID in eventTracks = vehicle trackerId + this, so it can't be taken
+# for the vehicle's own track. lprAttrs stays on the vehicle id.
 PLATE_TRACKER_OFFSET = 200000
 
 # enrich.py:73-79. Plate-detector score floor; plates narrower than PLATE_MIN_PX (crop pixels)
@@ -323,16 +324,6 @@ def _norm_box(x1, y1, x2, y2, fw, fh):
             round((x2 - x1) * COORD_END / fw, 1), round((y2 - y1) * COORD_END / fh, 1)]
 
 
-def _jpeg(img):
-    try:
-        import cv2
-        ok, buf = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, 90])
-        return buf.tobytes() if ok else b""
-    except Exception:
-        log.debug("plate JPEG encode failed", exc_info=True)
-        return b""
-
-
 def plate_descriptor(snap_id, text, conf, coord):
     """One lprInferenceSchema eventTracks descriptor (all fields required, M/315148:26-38;
     Protect's smartDetectObjectDescriptorAjvParse also wants coord = 4 finite numbers and
@@ -351,7 +342,7 @@ def build_lpr(camera_id, event_id, frames, vehicle_meta, start_ms=None, reader=N
     frames: {ts: BGR ndarray}. vehicle_meta: [{ts, roi: {coord: [x, y, w, h] 0..1000,
     objectType, trackerId}}] (M/346308:76-80, 96: roi is a single object). reader: optional
     callable(crop) -> [(text, confidence, bbox)] replacing fast-alpr (tests).
-    jpegs: {str(snapshot trackerID): plate crop JPEG}, snapshot id = trackerId + offset.
+    jpegs: always {} (no plate snapshots are sent, see the module docstring).
     """
     global _unavailable_logged
     t0 = time.monotonic()
@@ -405,8 +396,7 @@ def build_lpr(camera_id, event_id, frames, vehicle_meta, start_ms=None, reader=N
                 best[tid] = {"text": text, "conf": conf, "ts": ts, "coord": coord,
                              "frame": frame, "box_px": (ox + x1, oy + y1, ox + x2, oy + y2),
                              "label": roi.get("label") or m.get("label"),
-                             "attrs": roi.get("attributes") or {},
-                             "plate": crop[max(0, y1):y2, max(0, x1):x2]}
+                             "attrs": roi.get("attributes") or {}}
     if not best:
         return None
 
@@ -433,37 +423,18 @@ def build_lpr(camera_id, event_id, frames, vehicle_meta, start_ms=None, reader=N
         # (M/785414:47-55), dropping the camera's confidence, and the detected-thumbnail card
         # takes its confidence from attributes.confidence (M/482984:249). attributeSchema is
         # passthrough, so a 0-100 confidence survives: the camera's own when the roi carries
-        # one, else the plate read's. The plate object gets the plate read's.
+        # one, else the plate read's.
         roi_conf = b["attrs"].get("confidence") if isinstance(b["attrs"], dict) else None
         attrs[str(tid)] = {**entry, "confidence": roi_conf if isinstance(roi_conf, (int, float))
                            else plate_conf}
+        # No plate snapshot (lprSnapshots stays []): Protect saves each one as its own
+        # licensePlate object, and only vehicle objects are linked to the plate's named group,
+        # so the License Plates page showed a second, unnamed plate-crop card next to the car
+        # (Driveway DFSC305, 2026-11-21). The plate number rides on the vehicle object alone.
         snap_id = tid + PLATE_TRACKER_OFFSET
-        # Protect gives the plate's own smartDetectObject the attributes of
-        # lprAttrs[snapshot trackerID] (M/785414:88-94), so the plate number has to sit under
-        # the snapshot id too, or the plate record is saved with no name.
-        attrs[str(snap_id)] = {**entry, "confidence": plate_conf}
-        wall = int(start_ms) + int(b["ts"]) if start_ms is not None else int(b["ts"])
-        snaps.append({
-            "clockBestMonotonic": int(b["ts"]),
-            "clockBestWall": wall,
-            "smartDetectHeatmap": "",
-            # smartDetectSnapshot is the firmware's LOCAL file path; syswrapper only tests it with `-f`
-            # and uploads it as multipart part named str(trackerID) (SW:4019-4026), so Protect never
-            # sees the path (M/337954:92 only copies it into the parsed snapshot). Mirror the
-            # firmware's /tmp/<camera>_<id>.jpg. Name = the plate number: Protect labels the
-            # plate's detected-thumbnail card with it (M/482984:245; "" left the card with no
-            # number, Driveway 2026-11-21). The name doubles as a plate flag only on a *vehicle*
-            # snapshot (M/204401:43); this one is typed licensePlate.
-            # Heatmap: nothing in SW or the save code reads it; "" until a capture shows otherwise.
-            "smartDetectSnapshot": f"/tmp/{camera_id}_{snap_id}.jpg",
-            "smartDetectSnapshotName": b["text"],
-            "smartDetectSnapshotType": "licensePlate",
-            "trackerID": snap_id,
-        })
         fh, fw = b["frame"].shape[:2]
         tracks.append({"timestamp": int(b["ts"]), "descriptors": [plate_descriptor(
             snap_id, b["text"], b["conf"], _norm_box(*b["box_px"], fw, fh))]})
-        jpegs[str(snap_id)] = _jpeg(b["plate"]) if b["plate"].size else b""
     lpr_json = {
         "cameraId": camera_id,
         "eventId": event_id,
