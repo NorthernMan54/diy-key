@@ -185,13 +185,14 @@ LABEL_TEMPLATES = ("a photo of a {}.", "a black and white night photo of a {}.")
 _label_cache = {}
 
 
-def label_matrix(labels):
-    """Unit text vectors, one row per label (cached), or None without CLIP."""
-    key = tuple(labels)
+def label_matrix(labels, templates=LABEL_TEMPLATES):
+    """Unit text vectors, one row per label (cached), or None without CLIP. templates: the
+    prompts averaged per label (default LABEL_TEMPLATES)."""
+    key = (tuple(labels), tuple(templates))
     if key not in _label_cache:
         rows = []
         for label in labels:
-            vecs = [text_embed(t.format(label)) for t in LABEL_TEMPLATES]
+            vecs = [text_embed(t.format(label)) for t in templates]
             if any(v is None for v in vecs):
                 return None
             v = np.mean(np.asarray(vecs, np.float32), 0)
@@ -200,12 +201,12 @@ def label_matrix(labels):
     return _label_cache[key]
 
 
-def label_probs(image_vec, labels):
+def label_probs(image_vec, labels, templates=None):
     """{label: probability} for a unit image vector over these labels (softmax of 100 x cosine,
-    CLIP's logit scale), or None without CLIP or an image vector."""
+    CLIP's logit scale), or None without CLIP or an image vector. templates: as label_matrix."""
     if not image_vec:
         return None
-    m = label_matrix(labels)
+    m = label_matrix(labels) if templates is None else label_matrix(labels, templates)
     if m is None:
         return None
     logits = 100.0 * (m @ np.asarray(image_vec, np.float32))

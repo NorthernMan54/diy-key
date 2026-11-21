@@ -119,10 +119,91 @@ def dominant_color(frame_rgb, coord):
     return str(values[i]), int(round(100 * counts[i] / counts.sum()))
 
 
+# CLIP colour. Pixel hue can't tell paint from reflections: on 2026-11-21 a silver Lexus on the
+# Driveway read "blue" (57-74 %) because its hood mirrored a clear sky (hood pixels 99-100 % blue,
+# median saturation ~0.5), and neither white balance nor a saturation cutoff fixes that without
+# losing real blue cars. CLIP judges the whole car, but alone it is brittle on small crops: a
+# white van on the road flipped gray <-> brown on a JPEG re-save, and CLIP's 224 px centre crop
+# only sees the middle of a wide box. So: average CLIP over the centre crop and the box padded to
+# a square, then (choose_color) where CLIP and the pixels disagree on whether the car is neutral
+# (white/gray/black) at all, take the neutral answer -- a wrong neutral colour reads less wrong
+# than a wrong vivid one, and coloured light/reflections push both methods toward vivid.
+# Protect has no silver; it folds into gray like COLOR_ALIASES. Day frames only: an IR/greyscale
+# crop has no colour for CLIP to see, so the pixel heuristic (white/gray/black) stays there.
+CLIP_COLOR_LABELS = ("red", "orange", "yellow", "green", "blue", "purple", "pink", "brown",
+                     "black", "white", "gray", "silver")
+CLIP_COLOR_TEMPLATES = ("a photo of a {} car.", "a photo of a {} vehicle.")
+NEUTRAL_COLORS = frozenset({"white", "gray", "black"})
+GRAYSCALE_MAX_SAT = 0.08  # median HSV saturation of an IR night crop is ~0
+
+
+def _box_crop(frame_rgb, coord):
+    fh, fw = frame_rgb.shape[:2]
+    x, y, w, h = (float(v) for v in coord[:4])
+    x1, x2 = max(0, int(x * fw / COORD_END)), min(fw, int((x + w) * fw / COORD_END))
+    y1, y2 = max(0, int(y * fh / COORD_END)), min(fh, int((y + h) * fh / COORD_END))
+    return frame_rgb[y1:y2, x1:x2]
+
+
+def _pad_square(img, value=128):
+    h, w = img.shape[:2]
+    side = max(h, w)
+    out = np.full((side, side, 3), value, dtype=img.dtype)
+    y, x = (side - h) // 2, (side - w) // 2
+    out[y:y + h, x:x + w] = img
+    return out
+
+
+def clip_color_probs(frame_rgb, coord):
+    """{Protect colour: probability} from CLIP zero-shot over the vehicle box (mean of the centre
+    crop and the box padded square), or None when CLIP is off or unavailable, the crop is empty,
+    or the crop is greyscale (IR)."""
+    try:
+        import clip_embed
+    except ImportError:
+        return None
+    if not clip_embed.enabled():
+        return None
+    crop = _box_crop(frame_rgb, coord)
+    if crop.size == 0 or crop.shape[0] < 16 or crop.shape[1] < 16:
+        return None
+    sample = crop[::4, ::4].reshape(-1, 3)
+    if float(np.median(_rgb_to_hsv(sample)[:, 1])) < GRAYSCALE_MAX_SAT:
+        return None
+    bgr = np.ascontiguousarray(crop[..., ::-1])  # image_embed wants BGR
+    merged = {}
+    views = (bgr, _pad_square(bgr))
+    for view in views:
+        probs = clip_embed.label_probs(clip_embed.image_embed(view), list(CLIP_COLOR_LABELS),
+                                       CLIP_COLOR_TEMPLATES)
+        if not probs:
+            return None
+        for name, p in probs.items():
+            name = COLOR_ALIASES.get(name, name)
+            merged[name] = merged.get(name, 0.0) + p / len(views)
+    return merged
+
+
+def choose_color(clip_probs, pixel):
+    """(color, confidence 0-100) from CLIP's probabilities and the pixel heuristic's
+    (color, confidence); either may be None. CLIP wins, except that when exactly one of the two
+    calls the car neutral (white/gray/black), the neutral answer wins."""
+    if pixel:
+        pixel = (COLOR_ALIASES.get(pixel[0], pixel[0]), pixel[1])
+    if not clip_probs:
+        return pixel
+    name = max(clip_probs, key=clip_probs.get)
+    clip = (name, int(round(100 * clip_probs[name])))
+    if pixel and pixel[0] != name and pixel[0] in NEUTRAL_COLORS and name not in NEUTRAL_COLORS:
+        return pixel
+    return clip
+
+
 def vehicle_attributes(label, frame_rgb, coord, roi_attrs=None):
     """{vehicleType?, color?} as {val, confidence}, or None. Confidence is 0-100 as in
     pi-port's descriptor attributes (scale there came from the Protect decompile). A camera
-    vehicleType/color in the ROI wins over the detector label and the colour heuristic."""
+    vehicleType/color in the ROI wins over the detector label; otherwise colour comes from
+    choose_color (CLIP, with the pixel heuristic as fallback and neutral tiebreak)."""
     roi_attrs = roi_attrs or {}
     attrs = {}
     vt = roi_attrs.get("vehicleType") or {}
@@ -137,7 +218,13 @@ def vehicle_attributes(label, frame_rgb, coord, roi_attrs=None):
             attrs["color"] = {"val": name,
                               "confidence": color_attr.get("confidence", 70)}
     elif frame_rgb is not None:
-        color = dominant_color(frame_rgb, coord)
+        probs = clip_color_probs(frame_rgb, coord)
+        pixel = dominant_color(frame_rgb, coord)
+        color = choose_color(probs, pixel)
+        log.debug("vehicle colour %s (clip %s, pixel %s)", color,
+                  None if probs is None else
+                  {k: round(v, 2) for k, v in sorted(probs.items(), key=lambda kv: -kv[1])[:3]},
+                  pixel)
         if color:
             name = COLOR_ALIASES.get(color[0], color[0])
             if name in PROTECT_COLORS:
@@ -341,12 +428,20 @@ def build_lpr(camera_id, event_id, frames, vehicle_meta, start_ms=None, reader=N
         va = vehicle_attributes(b["label"], b["frame"][..., ::-1], b["coord"], b["attrs"])
         if va:
             entry.update(va)
-        attrs[str(tid)] = entry
+        plate_conf = int(round(100 * b["conf"]))
+        # Protect REPLACES the vehicle object's attributes with lprAttrs[vehicle id]
+        # (M/785414:47-55), dropping the camera's confidence, and the detected-thumbnail card
+        # takes its confidence from attributes.confidence (M/482984:249). attributeSchema is
+        # passthrough, so a 0-100 confidence survives: the camera's own when the roi carries
+        # one, else the plate read's. The plate object gets the plate read's.
+        roi_conf = b["attrs"].get("confidence") if isinstance(b["attrs"], dict) else None
+        attrs[str(tid)] = {**entry, "confidence": roi_conf if isinstance(roi_conf, (int, float))
+                           else plate_conf}
         snap_id = tid + PLATE_TRACKER_OFFSET
         # Protect gives the plate's own smartDetectObject the attributes of
         # lprAttrs[snapshot trackerID] (M/785414:88-94), so the plate number has to sit under
         # the snapshot id too, or the plate record is saved with no name.
-        attrs[str(snap_id)] = entry
+        attrs[str(snap_id)] = {**entry, "confidence": plate_conf}
         wall = int(start_ms) + int(b["ts"]) if start_ms is not None else int(b["ts"])
         snaps.append({
             "clockBestMonotonic": int(b["ts"]),
@@ -355,11 +450,13 @@ def build_lpr(camera_id, event_id, frames, vehicle_meta, start_ms=None, reader=N
             # smartDetectSnapshot is the firmware's LOCAL file path; syswrapper only tests it with `-f`
             # and uploads it as multipart part named str(trackerID) (SW:4019-4026), so Protect never
             # sees the path (M/337954:92 only copies it into the parsed snapshot). Mirror the
-            # firmware's /tmp/<camera>_<id>.jpg. Name stays "": Protect uses it as the object's
-            # display name (M/482984:245) and, on a vehicle snapshot, as the plate flag (M/204401:43).
+            # firmware's /tmp/<camera>_<id>.jpg. Name = the plate number: Protect labels the
+            # plate's detected-thumbnail card with it (M/482984:245; "" left the card with no
+            # number, Driveway 2026-11-21). The name doubles as a plate flag only on a *vehicle*
+            # snapshot (M/204401:43); this one is typed licensePlate.
             # Heatmap: nothing in SW or the save code reads it; "" until a capture shows otherwise.
             "smartDetectSnapshot": f"/tmp/{camera_id}_{snap_id}.jpg",
-            "smartDetectSnapshotName": "",
+            "smartDetectSnapshotName": b["text"],
             "smartDetectSnapshotType": "licensePlate",
             "trackerID": snap_id,
         })

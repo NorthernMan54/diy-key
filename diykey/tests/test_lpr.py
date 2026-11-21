@@ -90,7 +90,11 @@ class BuildLprTest(unittest.TestCase):
                                   "smartDetectSnapshotType", "trackerID"})
         self.assertEqual(s["smartDetectSnapshotType"], "licensePlate")
         self.assertEqual(s["smartDetectSnapshot"], f"/tmp/cam1_{7 + lpr.PLATE_TRACKER_OFFSET}.jpg")
-        self.assertEqual((s["smartDetectHeatmap"], s["smartDetectSnapshotName"]), ("", ""))
+        # The plate card's label in Protect is the snapshot name (M/482984:245).
+        self.assertEqual((s["smartDetectHeatmap"], s["smartDetectSnapshotName"]), ("", "ABC123"))
+        # attributes.confidence is the card's confidence; no roi confidence -> the plate read's.
+        self.assertEqual(a["confidence"], 90)
+        self.assertEqual(j["lprAttrs"][str(7 + lpr.PLATE_TRACKER_OFFSET)]["confidence"], 90)
         self.assertEqual(s["clockBestMonotonic"], 1000)
         self.assertEqual(s["clockBestWall"], 1_700_000_001_000)
         self.assertEqual(s["trackerID"], 7 + lpr.PLATE_TRACKER_OFFSET)
@@ -145,6 +149,15 @@ class BuildLprTest(unittest.TestCase):
         self.assertEqual(attrs["vehicleType"], {"val": "suv", "confidence": 88})
         self.assertEqual(attrs["color"], {"val": "gray", "confidence": 95})  # silver -> gray
 
+    def test_vehicle_keeps_camera_confidence_plate_gets_read_confidence(self):
+        m = _meta(1, 3)
+        m["roi"]["attributes"] = {"confidence": 91}
+        j, _ = lpr.build_lpr("c", "e", {1: _frame()}, [m],
+                             reader=_reader([[("CLVA684", 0.874, BOX)]]))
+        self.assertEqual(j["lprAttrs"]["3"]["confidence"], 91)
+        self.assertEqual(j["lprAttrs"][str(3 + lpr.PLATE_TRACKER_OFFSET)]["confidence"], 87)
+        self.assertEqual(j["lprAttrs"]["3"]["matchedName"], "CLVA684")
+
     def test_vehicle_type_from_label(self):
         m = _meta(1, 3)
         m["roi"]["label"] = "truck"
@@ -189,3 +202,61 @@ class OcrConfidenceTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class _FakeClip:
+    def __init__(self, probs, enabled=True):
+        self.probs, self._enabled, self.embedded = probs, enabled, 0
+
+    def enabled(self):
+        return self._enabled
+
+    def image_embed(self, img_bgr):
+        self.embedded += 1
+        return [1.0, 0.0]
+
+    def label_probs(self, vec, labels, templates=None):
+        assert templates == lpr.CLIP_COLOR_TEMPLATES
+        return {k: self.probs.get(k, 0.0) for k in labels}
+
+
+class ClipColourTest(unittest.TestCase):
+    COORD = [250, 250, 500, 500]
+
+    def _colour(self, fake, bgr=(200, 120, 60)):
+        with mock.patch.dict(sys.modules, {"clip_embed": fake}):
+            return lpr.vehicle_attributes(None, _frame(bgr)[..., ::-1], self.COORD)
+
+    def test_sky_blue_pixels_lose_to_clip_neutral_and_silver_folds_into_gray(self):
+        # Sky reflected on a silver hood: pixels say blue; CLIP's silver+gray wins.
+        fake = _FakeClip({"silver": 0.3, "gray": 0.25, "blue": 0.4, "white": 0.05})
+        self.assertEqual(self._colour(fake)["color"], {"val": "gray", "confidence": 55})
+        self.assertEqual(fake.embedded, 2)  # centre crop + padded square
+
+    def test_clip_vivid_loses_to_pixel_neutral(self):
+        # White van among autumn leaves: CLIP leans brown, pixels say gray.
+        fake = _FakeClip({"brown": 0.5, "gray": 0.3, "white": 0.2})
+        colour = self._colour(fake, bgr=(150, 150, 160))["color"]
+        self.assertEqual(colour["val"], "gray")
+
+    def test_clip_wins_when_both_vivid(self):
+        fake = _FakeClip({"green": 0.7, "blue": 0.3})
+        self.assertEqual(self._colour(fake)["color"], {"val": "green", "confidence": 70})
+
+    def test_greyscale_ir_crop_keeps_pixel_heuristic(self):
+        fake = _FakeClip({"blue": 1.0})
+        self.assertEqual(self._colour(fake, bgr=(128, 128, 128))["color"]["val"], "gray")
+        self.assertEqual(fake.embedded, 0)
+
+    def test_clip_off_keeps_pixel_heuristic(self):
+        fake = _FakeClip({"red": 1.0}, enabled=False)
+        self.assertEqual(self._colour(fake)["color"]["val"], "blue")  # BGR (200,120,60)
+        self.assertEqual(fake.embedded, 0)
+
+    def test_roi_colour_still_wins(self):
+        fake = _FakeClip({"red": 1.0})
+        with mock.patch.dict(sys.modules, {"clip_embed": fake}):
+            a = lpr.vehicle_attributes(None, _frame()[..., ::-1], self.COORD,
+                                       {"color": {"val": "white", "confidence": 80}})
+        self.assertEqual(a["color"], {"val": "white", "confidence": 80})
+        self.assertEqual(fake.embedded, 0)
