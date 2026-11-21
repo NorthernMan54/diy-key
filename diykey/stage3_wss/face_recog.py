@@ -91,8 +91,16 @@ def weak_embedding(embedding):
 
 
 def _embedding_list(emb):
-    """SFace feature (1x128 float32) -> JSON-safe list for faceEmbed."""
-    return [round(float(v), 5) for v in np.asarray(emb).ravel()]
+    """SFace feature (1x128 float32) -> JSON-safe, L2-normalised list for faceEmbed.
+
+    A real AI Port's faceEmbed has length 1.000 (live, 2026-11-21); raw SFace is about 7-9.
+    Protect's face service compares by dot product, so raw vectors scored far past its
+    threshold. The weak-face gate (weak_embedding) runs on the raw vector before this."""
+    v = np.asarray(emb, dtype=np.float64).ravel()
+    n = float(np.linalg.norm(v))
+    if n > 0 and np.isfinite(n):
+        v = v / n
+    return [round(float(x), 6) for x in v]
 
 
 def _expand_px(coord, img_w, img_h, margin=CROP_MARGIN, top_frac=1.0):

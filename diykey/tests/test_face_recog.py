@@ -67,6 +67,8 @@ class FaceResultTest(unittest.TestCase):
         attrs = face_json["faceAttrs"][str(fid)]
         self.assertEqual(len(attrs["faceEmbed"]), 128)
         self.assertTrue(all(isinstance(v, float) for v in attrs["faceEmbed"]))
+        # Unit length, as a real AI Port's faceEmbed is (live 2026-11-21).
+        self.assertAlmostEqual(float(np.linalg.norm(attrs["faceEmbed"])), 1.0, places=4)
         self.assertEqual(attrs["faceMask"], {"confidence": face_recog.FACE_MASK_CONF, "val": "none"})
         self.assertEqual(attrs["matchedName"], "")
         self.assertEqual(attrs["namesTopK"], [])
@@ -246,5 +248,15 @@ class FaceMetaTest(unittest.TestCase):
         self.assertIsNotNone(res)
 
 
+class EmbeddingListTest(unittest.TestCase):
+    def test_normalised(self):
+        self.assertEqual(face_recog._embedding_list(np.array([[3.0, 4.0]], np.float32)),
+                         [0.6, 0.8])
+
+    def test_zero_vector_left_alone(self):
+        self.assertEqual(face_recog._embedding_list(np.zeros(2)), [0.0, 0.0])
+
+
 if __name__ == "__main__":
     unittest.main()
+
