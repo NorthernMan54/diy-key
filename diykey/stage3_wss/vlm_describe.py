@@ -38,6 +38,7 @@ import json
 import logging
 import os
 import threading
+import time
 
 import cv2
 import numpy as np
@@ -73,6 +74,7 @@ _lock = threading.Lock()        # one inference at a time
 _load_lock = threading.Lock()
 _loaded = {}                    # (backend, model) -> callable(rgb, prompt) -> str
 _failed = set()                 # (backend, model) that failed to load: logged once
+_last_used = 0.0                # monotonic time of the last describe/attributes call
 
 
 def preprocess(bgr, crop_top=True):
@@ -226,6 +228,7 @@ def describe(bgr, backend=None, context=None, crop_top=True):
         rgb = preprocess(bgr, crop_top=crop_top)
         prompt = f"{PROMPT}\n{context}" if context else PROMPT
         with _lock:
+            _touch()
             raw = backend(rgb, prompt)
         return postprocess(raw) or None
     except Exception as e:
@@ -276,6 +279,7 @@ def attributes(bgr, system_prompt, user_prompt, backend=None, max_tokens=None):
                 return []
         rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
         with _lock:
+            _touch()
             raw = backend(rgb, user_prompt, system=system_prompt,
                           max_tokens=max_tokens or ATTR_MAX_NEW_TOKENS)
         labels = parse_attribute_reply(getattr(raw, "text", raw))
@@ -285,3 +289,46 @@ def attributes(bgr, system_prompt, user_prompt, backend=None, max_tokens=None):
     except Exception as e:
         log.warning("VLM attributes failed: %s", e)
         return []
+
+
+def _touch():
+    global _last_used
+    _last_used = time.monotonic()
+
+
+def loaded():
+    return bool(_loaded)
+
+
+def prewarm():
+    """Load the configured backend in the background when it isn't loaded (an event has
+    arrived after an idle unload: tagging runs first, so the summary finds it ready)."""
+    if _loaded or not enabled():
+        return None
+    _touch()  # so the idle sweep doesn't drop it again before the summary uses it
+    name = os.environ.get("DIYKEY_VLM", "off").strip().lower()
+    t = threading.Thread(target=_get_backend,
+                         args=(name, os.environ.get("DIYKEY_VLM_MODEL", "")),
+                         daemon=True, name="diykey-vlm-prewarm")
+    t.start()
+    return t
+
+
+def unload_if_idle(idle_s, now=None):
+    """Drop the loaded backends when unused for idle_s (idle_unload); True when dropped.
+    Skips while an inference or a load holds its lock; the next call loads it again."""
+    now = time.monotonic() if now is None else now
+    if not _loaded or now - _last_used < idle_s or not _lock.acquire(blocking=False):
+        return False
+    try:
+        if not _load_lock.acquire(blocking=False):
+            return False
+        try:
+            if not _loaded or now - _last_used < idle_s:
+                return False
+            _loaded.clear()
+            return True
+        finally:
+            _load_lock.release()
+    finally:
+        _lock.release()

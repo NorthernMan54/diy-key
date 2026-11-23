@@ -41,6 +41,7 @@ only: no vendor code or binaries in the repo, no console modification.
 | `stage3_wss/scene_memory.py` | Per-camera "always there" scene, so summaries and tags follow what changed |
 | `stage3_wss/face_recog.py` | Face detection + embedding for `recognizeFaces` |
 | `stage3_wss/face_enhance.py` | GFPGAN for Faces-page Enhance (`enhanceImage`); `DIYKEY_FACE_ENHANCE_PROVIDER` |
+| `stage3_wss/idle_unload.py` | `DIYKEY_IDLE_UNLOAD_MIN`: drop the VLM and face enhance when unused, reload on demand |
 | `stage3_wss/lpr.py` | Licence-plate reads for the LPR result |
 | `stage3_wss/reid_model.py` | Person re-ID vectors (OSNet-AIN) |
 | `stage3_wss/system_stats.py` | Hardware stats for the `systemMetrics` RPC |

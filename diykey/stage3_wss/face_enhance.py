@@ -49,6 +49,7 @@ with a half-finished load).
 import logging
 import os
 import threading
+import time
 
 import cv2
 import numpy as np
@@ -66,6 +67,7 @@ _session = None
 _load_failed = False
 _key = None  # (path, mtime_ns) the current session or failure came from
 _logged = set()
+_last_used = 0.0  # monotonic time of the last enhance(), for idle_unload
 
 
 def _warn_once(kind, msg, *args):
@@ -169,7 +171,9 @@ def enhance(jpeg_bytes, session=None):
         _warn_once("decode", "face enhance: could not decode image (%d bytes)",
                    len(jpeg_bytes or b""))
         return jpeg_bytes
+    global _last_used
     with _lock:
+        _last_used = time.monotonic()
         sess = session if session is not None else _load_session()
         if sess is None:
             return jpeg_bytes
@@ -183,3 +187,20 @@ def enhance(jpeg_bytes, session=None):
         _warn_once("encode", "face enhance: JPEG encode failed")
         return jpeg_bytes
     return buf.tobytes()
+
+
+def unload_if_idle(idle_s, now=None):
+    """Drop the ONNX session when unused for idle_s (idle_unload); True when dropped. Skips
+    while an enhance holds the lock; the next enhance() loads it again (_key is kept, so a
+    failed load is not retried until the file changes)."""
+    global _session
+    now = time.monotonic() if now is None else now
+    if _session is None or now - _last_used < idle_s or not _lock.acquire(blocking=False):
+        return False
+    try:
+        if _session is None or now - _last_used < idle_s:
+            return False
+        _session = None
+        return True
+    finally:
+        _lock.release()

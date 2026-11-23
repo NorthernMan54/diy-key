@@ -53,6 +53,7 @@ import e5_embed  # noqa: E402
 import reid_model  # noqa: E402
 import second_verifier  # noqa: E402
 import face_recog  # noqa: E402
+import idle_unload  # noqa: E402
 import lpr  # noqa: E402
 import face_enhance  # noqa: E402
 import vlm_describe  # noqa: E402
@@ -793,6 +794,8 @@ def handle_action(head, body, device_info):
         # POST the result (multipart field `ram`) to the console's resUrl.
         # Face/LPR share of the queue for getTaskQueueInfo: the models run when _wanted_metas
         # has entries for them (same gates as _handle_recognize).
+        # After an idle unload, start reloading the VLM now; tagging runs before the summary.
+        vlm_describe.prewarm()
         wanted = _wanted_metas(body or {})
         extra = tuple(g for g in ("face", "lpr") if g in wanted)
         fetch = _Prefetch()
@@ -2580,6 +2583,8 @@ def main():
         log.warning("AI Key Advanced alarms (natural-language Alarm Manager rules) won't fire "
                     "reliably -- missing: %s", ", ".join(missing))
     threading.Thread(target=_warm_models, daemon=True, name="diykey-warm").start()
+    idle_unload.start([("VLM", vlm_describe.unload_if_idle),
+                       ("face enhance", face_enhance.unload_if_idle)], footprint=_footprint_mb)
     # Keep the 1 s samples running from process start so Protect's 5-minute poll always
     # gets a block average instead of a value sampled inside the RPC.
     start_system_metrics_sampler()

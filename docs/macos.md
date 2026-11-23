@@ -106,6 +106,7 @@ restart           touch to restart DIY-Key
 | `DIYKEY_FW_DIR`, `DIYKEY_FW_DOWNLOAD`, `DIYKEY_FAKE_UPDATE_S` | Where offered firmware is kept (default `~/.diy-key/firmware`), whether, and how long the fake install takes |
 | `DIYKEY_PG`, `DIYKEY_PG_BIN` | `0` to run without the instance's PostgreSQL; Homebrew `postgresql@17` bin dir |
 | `DIYKEY_DEBUG`, `DIYKEY_DEBUG_LOGGERS`, `DIYKEY_LOG_MAX_MB`, `DIYKEY_LOG_KEEP` | Logging (`DIYKEY_DEBUG_LOGGERS`: comma list of loggers, e.g. `diykey.lpr`, at debug) |
+| `DIYKEY_IDLE_UNLOAD_MIN` | Unload the VLM (~1.4 GB) and face enhance (~0.9 GB) after this many minutes unused; they reload in seconds on the next request, and an incoming event starts the VLM reload early. Off when unset. RAM++ and CLIP stay loaded (reloads of 1.5-6 min and up to 30 s) |
 
 AI Key Advanced alarms (Alarm Manager rules with a natural-language sentence and a threshold) need
 `DIYKEY_CLIP=1`, `DIYKEY_RAM_MODEL`, `DIYKEY_RAM_TAGS` and the nl-search connection; startup logs
