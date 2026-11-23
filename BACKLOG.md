@@ -4,6 +4,12 @@ Open items for the macOS / Protect 7.3.70 work. Newest first within each section
 
 ## Next session
 
+- **`systemMetrics` still omits `PsqlUsage` and `curTops`**: aikey-fw 2.2.8
+  `aikey_monitor.py` sends both alongside CPU/GPU/Memory. Protect uses `PsqlUsage`
+  (`aiprocessors.db` `attemptReleaseSpace`) to trim `ramDetections` and session vectors when
+  it exceeds 0.8; without it the AI Key's database grows until the disk fills. `curTops` is
+  a derived GPU/CPU figure. Implement both once the AI Key's PostgreSQL and state sizing
+  are settled.
 - **Finish splitting `stage3_wss/ucp4_client.py`** (~2,300 lines). Done 2026-11-11: framing into
   `ucp4_wire.py`, event-meta helpers into `task_meta.py` (re-exported, no behaviour change). Left:
   task queue / prefetch / warm-up, the VLM summary helpers, enhance and describe handlers. Tests

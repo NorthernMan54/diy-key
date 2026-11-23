@@ -199,6 +199,29 @@ class FaceMinSizeTest(unittest.TestCase):
             self.assertIsNotNone(self._run(22))
 
 
+class AlignmentQualityTest(unittest.TestCase):
+    """The cheap stand-in for the AI Key's SmartFace_lmk + QA models."""
+
+    def test_perfect_template_has_no_error(self):
+        # YuNet order: right eye, left eye, nose, right mouth, left mouth
+        pts = face_recog.ARCFACE_DST[[1, 0, 2, 4, 3]]
+        rms, max_err = face_recog.alignment_quality(pts)
+        self.assertIsNotNone(rms)
+        self.assertLess(rms, 0.01)
+        self.assertLess(max_err, 0.01)
+
+    def test_moved_landmark_is_flagged(self):
+        pts = face_recog.ARCFACE_DST[[1, 0, 2, 4, 3]].copy()
+        pts[2, 0] += 120.0
+        rms, max_err = face_recog.alignment_quality(pts)
+        self.assertGreater(rms, face_recog.FACE_MAX_ALIGN_RMS)
+        self.assertGreater(max_err, face_recog.FACE_MAX_LANDMARK_ERR)
+
+    def test_bad_shape_is_rejected(self):
+        self.assertEqual(face_recog.alignment_quality([1, 2, 3, 4]), (None, None))
+        self.assertEqual(face_recog.alignment_quality([float("nan")] * 10), (None, None))
+
+
 class FaceMetaTest(unittest.TestCase):
     def setUp(self):  # these use small synthetic faces; FaceMinSizeTest covers the limit
         patcher = mock.patch.object(face_recog, "FACE_MIN_PX", 0)
@@ -220,12 +243,19 @@ class FaceMetaTest(unittest.TestCase):
                          ["linkedPersonTrackerID"], 7)
 
     def test_face_box_fallback_unaligned_when_yunet_finds_nothing(self):
+        # The old behaviour, now opt-in: an unaligned resize is a poor embedding, so it is
+        # off unless DIYKEY_FACE_UNALIGNED=1.
         infer = mock.Mock(return_value=[])
         embed = mock.Mock(return_value=emb(3))
         fm = [{"ts": 1000, "roi": [{"coord": [350, 120, 100, 130], "trackerId": 55}]}]
         pm = [meta(1000, 7), meta(1000, 8, coord=(700, 100, 200, 800))]
-        res = face_recog.build_face_result("c", "e", {1000: frame()}, pm, infer=infer,
-                                           face_meta=fm, embed=embed)
+        with mock.patch.object(face_recog, "FACE_UNALIGNED", False):
+            self.assertIsNone(face_recog.build_face_result(
+                "c", "e", {1000: frame()}, pm, infer=infer, face_meta=fm, embed=embed))
+        embed.assert_not_called()
+        with mock.patch.object(face_recog, "FACE_UNALIGNED", True):
+            res = face_recog.build_face_result("c", "e", {1000: frame()}, pm, infer=infer,
+                                               face_meta=fm, embed=embed)
         face_json, _ = res
         crop = embed.call_args[0][0]
         self.assertEqual(crop.shape[:2], (63, 64))

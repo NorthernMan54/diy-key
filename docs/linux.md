@@ -86,11 +86,12 @@ DIYKEY_RAM_MODEL=/root/models/yolov9-s-320.onnx
 # DIYKEY_NL_SEARCH=1
 # DIYKEY_RAM_TAGS=/root/up/app/fixtures/ram_tags.csv
 # DIYKEY_FW_DIR=/root/diy-key-firmware
-# Features advertised to Protect; each is off unless set here.
-# DIYKEY_FACE=1          # face recognition
+# Features advertised to Protect are on by default, like the firmware. Set a key to 0/off to
+# hide that capability; a missing model fails its task, not the device.
+# DIYKEY_FACE=0          # hide face recognition
 # DIYKEY_FACE_MODELS=/path/to/models
-# DIYKEY_LPR=1           # licence plate recognition
-# DIYKEY_FACE_ENHANCE=1  # face enhancement
+# DIYKEY_LPR=0           # hide licence plate recognition
+# DIYKEY_FACE_ENHANCE=0  # hide face enhancement
 # DIYKEY_FACE_ENHANCE_MODEL=/path/to/gfpgan_1.4.onnx
 # DIYKEY_VLM=transformers  # AI summary on Linux (mlx is macOS only); needs pip install transformers
 # DIYKEY_VLM_MODEL=/path/to/InternVL2.5-1B   # local checkpoint for transformers

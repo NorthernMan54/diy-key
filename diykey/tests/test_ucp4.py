@@ -141,45 +141,38 @@ class TestHandleAction(_StateDirTest):
         with mock.patch.dict(os.environ, {**clean, **env}, clear=True):
             return self._call("getInfo")["featureFlags"]
 
-    def test_get_info_feature_flags_default_off(self):
-        # Absent flags read as enabled in Protect (M/643837:52-67): every one must be sent.
+    def test_get_info_feature_flags_default_on(self):
+        # A real key advertises its whole set; missing models fail tasks, so every capability
+        # is on unless the operator turns it off.
         flags = self._flags()
-        off = {"enabled": False, "version": "v1"}
         for name in ("supportFaceEnhancement", "supportRetroactiveProcessing",
                      "supportImageSearch", "supportRecognizeAnything", "supportFaceRecognition",
-                     "supportLicensePlateRecognition", "supportAiSummary"):
-            self.assertEqual(flags[name], off, name)
-        self.assertEqual(flags["supportPoseEstimation"], {"enabled": True, "version": "v1"})
-        # On by default: it gates Person in Second Stage Verification.
-        self.assertEqual(flags["supportPersonReId"], {"enabled": True, "version": "v1"})
+                     "supportLicensePlateRecognition", "supportAiSummary",
+                     "supportReverification", "supportPoseEstimation", "supportPersonReId"):
+            self.assertEqual(flags[name], {"enabled": True, "version": "v1"}, name)
+        self.assertFalse(flags["supportLocate"])
         self.assertEqual(flags["aiMode"], "basic")
 
-    def test_get_info_feature_flags_from_env(self):
+    def test_get_info_feature_flags_env_override(self):
+        flags = self._flags(DIYKEY_FACE="0", DIYKEY_LPR="off", DIYKEY_FACE_ENHANCE="false",
+                            DIYKEY_CLIP="no", DIYKEY_VLM="0", DIYKEY_RAM_MODEL="",
+                            DIYKEY_PERSON_REID="0")
+        for name in ("supportFaceEnhancement", "supportRetroactiveProcessing",
+                     "supportImageSearch", "supportRecognizeAnything", "supportFaceRecognition",
+                     "supportLicensePlateRecognition", "supportAiSummary",
+                     "supportReverification", "supportPersonReId"):
+            self.assertFalse(flags[name]["enabled"], name)
+        # An explicit truthy value (or a configured model) keeps it on.
         flags = self._flags(DIYKEY_FACE="1", DIYKEY_LPR="true", DIYKEY_FACE_ENHANCE="yes",
                             DIYKEY_VLM="mlx", DIYKEY_CLIP="1", DIYKEY_RAM_MODEL="/m.onnx")
         for name in ("supportFaceEnhancement", "supportRetroactiveProcessing",
                      "supportImageSearch", "supportRecognizeAnything", "supportFaceRecognition",
                      "supportLicensePlateRecognition", "supportAiSummary"):
             self.assertTrue(flags[name]["enabled"], name)
-        self.assertFalse(self._flags(DIYKEY_PERSON_REID="0")["supportPersonReId"]["enabled"])
 
-    def test_advertise_all_matches_the_firmware_set(self):
-        flags = self._flags(DIYKEY_ADVERTISE_ALL="1")
-        for name in ("supportFaceEnhancement", "supportRetroactiveProcessing",
-                     "supportImageSearch", "supportRecognizeAnything",
-                     "supportFaceRecognition", "supportLicensePlateRecognition",
-                     "supportAiSummary", "supportReverification"):
-            self.assertTrue(flags[name]["enabled"], name)
-        self.assertFalse(flags["supportLocate"])
-
-    def test_feature_flags_falsy_values(self):
-        flags = self._flags(DIYKEY_FACE="0", DIYKEY_LPR="", DIYKEY_VLM="off", DIYKEY_RAM_MODEL="")
-        for name in ("supportFaceRecognition", "supportLicensePlateRecognition",
-                     "supportAiSummary", "supportRecognizeAnything",
-                     "supportRetroactiveProcessing"):
-            self.assertFalse(flags[name]["enabled"], name)
-        self.assertFalse(self._flags(DIYKEY_VLM="0")["supportAiSummary"]["enabled"])
+    def test_feature_flags_unsupported_vlm_hides_summary(self):
         self.assertFalse(self._flags(DIYKEY_VLM="qwen2-vl")["supportAiSummary"]["enabled"])
+        self.assertTrue(self._flags()["supportAiSummary"]["enabled"])
 
     def test_model_mode_reported_in_get_info(self):
         self.addCleanup(setattr, ucp4_client, "_ai_mode", "basic")
@@ -222,10 +215,24 @@ class TestHandleAction(_StateDirTest):
         # Under the root daemon psql's default role would be "root", which doesn't exist.
         run = mock.Mock(return_value=mock.Mock(returncode=0, stderr=""))
         with mock.patch.dict(os.environ, {"DIYKEY_PG_SOCKET": "/pg", "DIYKEY_PG_USER": "owner"}), \
+                mock.patch.object(ucp4_client.shutil, "which", return_value=None), \
                 mock.patch.object(ucp4_client.subprocess, "run", run):
             ucp4_client._apply_pg_password("new")
         argv = run.call_args.args[0]
         self.assertEqual(argv[argv.index("-U") + 1], "owner")
+
+    def test_pg_password_root_uses_runuser(self):
+        # As root with runuser available, peer auth runs as the PG OS user; -U is neither
+        # needed nor accepted there, so the argv must be runuser -u owner -- psql ...
+        run = mock.Mock(return_value=mock.Mock(returncode=0, stderr=""))
+        with mock.patch.dict(os.environ, {"DIYKEY_PG_SOCKET": "/pg", "DIYKEY_PG_USER": "owner"}), \
+                mock.patch.object(ucp4_client.os, "geteuid", return_value=0), \
+                mock.patch.object(ucp4_client.shutil, "which", return_value="/usr/sbin/runuser"), \
+                mock.patch.object(ucp4_client.subprocess, "run", run):
+            ucp4_client._apply_pg_password("new")
+        argv = run.call_args.args[0]
+        self.assertEqual(argv[:4], ["/usr/sbin/runuser", "-u", "owner", "--"])
+        self.assertNotIn("-U", argv)
 
     def test_pg_password_default_role_without_owner(self):
         run = mock.Mock(return_value=mock.Mock(returncode=0, stderr=""))
@@ -304,12 +311,21 @@ class TestHandleAction(_StateDirTest):
             "ai-summary": 12.5, "lpr-legacy": 1.2})
 
     def test_system_metrics_are_fractions(self):
-        # Firmware jtop_systemMetrics.py sends load/100; Protect compares PsqlUsage to 0.8.
+        # aikey_monitor.py averages 1 s samples and sends avg/100 (CPU/GPU) and used/tot.
         raw = {"cpu": {"load": 25.0}, "gpu": {"load": None}, "npu": {"load": 90.0},
                "ram": {"totalKilobytes": 1000, "availableKilobytes": 250}}
         with mock.patch.object(ucp4_client, "collect_system_metrics", return_value=raw):
             metrics = {m["name"]: m["value"] for m in self._call("systemMetrics")["systemMetrics"]}
         self.assertEqual(metrics, {"CPU": 0.25, "GPU": 0.0, "Memory": 0.75})
+
+    def test_system_metrics_prefers_averaged_memory(self):
+        raw = {"cpu": {"load": 25.0}, "gpu": {"load": 0.0},
+               "ram": {"totalKilobytes": 1000, "availableKilobytes": 100,
+                       "usedFraction": 0.5}}
+        with mock.patch.object(ucp4_client, "collect_system_metrics", return_value=raw):
+            metrics = {m["name"]: m["value"] for m in self._call("systemMetrics")["systemMetrics"]}
+        # total-available would be 0.9; the sampler's block average must win.
+        self.assertEqual(metrics, {"CPU": 0.25, "GPU": 0.0, "Memory": 0.5})
 
     def test_ack_only_actions_reply_empty_and_log_once(self):
         ucp4_client._ack_only_logged.discard("sshService")
@@ -355,8 +371,9 @@ class TestHandleAction(_StateDirTest):
         self.assertEqual(body, {})
 
     def test_feature_flags_reverification_follows_ram_model(self):
-        self.assertFalse(self._flags()["supportReverification"]["enabled"])
+        self.assertTrue(self._flags()["supportReverification"]["enabled"])
         self.assertTrue(self._flags(DIYKEY_RAM_MODEL="/m.onnx")["supportReverification"]["enabled"])
+        self.assertFalse(self._flags(DIYKEY_RAM_MODEL="")["supportReverification"]["enabled"])
 
     def test_feature_flags_mtls_and_locate(self):
         flags = self._flags()
@@ -975,6 +992,11 @@ class TestWarmModels(unittest.TestCase):
         self.assertEqual(self._run(self.ALL),
                          ["clip", "labels", "vlm", "reid", "face", "enhance", "lpr", "ram"])
 
+    def test_face_lpr_warm_without_env(self):
+        order = self._run({})
+        for name in ("face", "enhance", "lpr"):
+            self.assertIn(name, order)
+
     def test_disabled_models_are_skipped(self):
         env = {k: "0" for k in self.ALL}
         self.assertEqual(self._run(env, on=False), ["ram"])
@@ -1045,6 +1067,12 @@ class TestRecognizeFaceLpr(_RecognizeTest):
         self.face.assert_not_called()
         self.lpr.assert_not_called()
         self.assertNotIn(self.START + 2500, self.extracted[0][1])
+
+    def test_on_without_env(self):
+        # Face/LPR default on, matching getInfo.featureFlags; env is an explicit off switch.
+        self._run(self._body(**self._metas()), {}, self.BOTH)
+        self.face.assert_called_once()
+        self.lpr.assert_called_once()
 
     def test_off_without_env(self):
         self._run(self._body(**self._metas()), {"DIYKEY_FACE": "0", "DIYKEY_LPR": ""}, self.BOTH)
@@ -1471,6 +1499,11 @@ class TestEnhanceImage(_StateDirTest):
         self.assertEqual(files["smartDetectObject"], (None, "obj1", "text/plain"))
         self.assertEqual(post.call_args.kwargs["headers"]["x-ident"], "FCECDAAABBCC")
         self.assertEqual(os.listdir(os.path.join(self.d, "clips", "enhance")), [])
+
+    def test_enhanced_without_env(self):
+        post = self._run({})
+        self.enhance.assert_called_once_with(b"orig")
+        self.assertEqual(post.call_args.kwargs["files"]["file"][1], b"new")
 
     def test_original_when_enhance_off(self):
         post = self._run({"DIYKEY_FACE_ENHANCE": "0"})

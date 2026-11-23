@@ -43,7 +43,7 @@ if _PROJECT_DIR not in sys.path:
     sys.path.insert(0, _PROJECT_DIR)
 
 from core import config  # noqa: E402
-from system_stats import collect_system_metrics  # noqa: E402
+from system_stats import collect_system_metrics, start_system_metrics_sampler  # noqa: E402
 import clip_fetch  # noqa: E402
 import firmware  # noqa: E402
 import ram_tagger  # noqa: E402
@@ -93,42 +93,46 @@ def _feature(enabled):
     return {"enabled": bool(enabled), "version": "v1"}
 
 
+def _enabled(env, key):
+    """Capability switch: on unless the env var explicitly says otherwise.
+
+    A real AI Key advertises its whole AI feature set and lets Protect's enable* settings
+    decide what is dispatched. Missing models fail the individual task, not the device, so
+    the default matches the hardware; set the key to 0/off to hide a capability instead.
+    """
+    value = env.get(key)
+    return value is None or value.strip().lower() not in _OFF_VALUES
+
+
 def _deep_flags(env, vlm):
     on = vlm and _truthy(env.get("DIYKEY_DEEP_MODE"))
     return {"supportDeepMode": on, "supportVlm": on}
 
 
 def _feature_flags(env=None):
-    """featureFlags for getInfo (aiMode added by the caller). Every capability defaults to
-    off unless its DIYKEY_* key enables it."""
+    """featureFlags for getInfo (aiMode added by the caller). Capabilities default to on;
+    each DIYKEY_* key below is an explicit off switch."""
     env = os.environ if env is None else env
-    # A real key advertises its whole AI feature set and lets Protect's enable* settings
-    # decide what is dispatched. The default here is honest about missing models; set
-    # DIYKEY_ADVERTISE_ALL=1 on a build that actually carries face/LPR/VLM models to match it.
-    advertise = _truthy(env.get("DIYKEY_ADVERTISE_ALL"))
-    ram = bool((env.get("DIYKEY_RAM_MODEL") or "").strip())
-    # Only the backends vlm_describe implements; any other value would advertise a summary
-    # that never arrives.
+    ram = _enabled(env, "DIYKEY_RAM_MODEL")
+    # Only the backends vlm_describe implements can answer a summary. With DIYKEY_VLM
+    # unset we still advertise it, like the firmware; setting it to an unsupported backend
+    # is an explicit override and hides the flag.
     vlm = (env.get("DIYKEY_VLM") or "").strip().lower() in ("mlx", "transformers")
     return {
-        # Unchanged from the always-on list this replaced.
         "supportPoseEstimation": _feature(True),
         # Gates the Person class in Second Stage Verification: Protect builds the NVR's in-memory
         # aiFeatureFlag.supportPersonReId from adopted AI Keys' getInfo (live 2026-10-29 on
         # Mac B: Person unselectable until advertised, then a browser reload). Live 2026-11-07
         # (Protect 7.3.74): turning it off hid Person again. No ReID model is needed for SSV
         # itself; DIYKEY_PERSON_REID=0 turns it off.
-        "supportPersonReId": _feature((env.get("DIYKEY_PERSON_REID") or "1").strip().lower()
-                                      not in _OFF_VALUES),
-        "supportFaceEnhancement": _feature(advertise
-                                           or _truthy(env.get("DIYKEY_FACE_ENHANCE"))),
-        "supportRetroactiveProcessing": _feature(advertise or ram),
-        "supportImageSearch": _feature(advertise or _truthy(env.get("DIYKEY_CLIP"))),
-        "supportRecognizeAnything": _feature(advertise or ram),
-        "supportFaceRecognition": _feature(advertise or _truthy(env.get("DIYKEY_FACE"))),
-        "supportLicensePlateRecognition": _feature(advertise
-                                                   or _truthy(env.get("DIYKEY_LPR"))),
-        "supportAiSummary": _feature(advertise or vlm),
+        "supportPersonReId": _feature(_enabled(env, "DIYKEY_PERSON_REID")),
+        "supportFaceEnhancement": _feature(_enabled(env, "DIYKEY_FACE_ENHANCE")),
+        "supportRetroactiveProcessing": _feature(ram),
+        "supportImageSearch": _feature(_enabled(env, "DIYKEY_CLIP")),
+        "supportRecognizeAnything": _feature(ram),
+        "supportFaceRecognition": _feature(_enabled(env, "DIYKEY_FACE")),
+        "supportLicensePlateRecognition": _feature(_enabled(env, "DIYKEY_LPR")),
+        "supportAiSummary": _feature("DIYKEY_VLM" not in env or vlm),
         # Deep Understanding (Protect M/59223:106-117, M/643837:69-72: plain booleans, absent
         # reads false; supportVlm is the legacy alias, kept in sync). isDeepModeCapable
         # (M/387031:24) is what lets Protect send modelMode "deep" and, once the NVR's deepUnderstandingSettings
@@ -141,7 +145,7 @@ def _feature_flags(env=None):
         # clip) runs second_verifier, which needs the detector DIYKEY_RAM_MODEL loads. The
         # firmware advertises it (aikey-fw 2.2.8 ai-key-base-file featureflags.json); Protect
         # 7.3.70 has no such attribute (M/59223) so this only matters on a newer Protect.
-        "supportReverification": _feature(advertise or ram),
+        "supportReverification": _feature(ram),
         # The firmware's own description: "AI Key presents its TLS client certificate on
         # outbound Protect internal aiprocessors API requests". Protect only uses it to refuse
         # an internal request that presents no matching certificate (M/761379:83-104), while
@@ -731,16 +735,21 @@ def handle_action(head, body, device_info):
         # 128 makes it the UP-AI-KEY-128 variant, anything else the 256 GB OrinNX256.
         return {"storageSize": "256"}
     if action == "systemMetrics":
-        # CONFIRMED schema: a flat top-level array of {name, value} numbers. Values are
-        # FRACTIONS 0-1 like the firmware's (aikey-fw 2.2.8 uaibd/hwmon/jtop_systemMetrics.py:
-        # cpu user/100, gpu load/100, RAM used/tot, rounded to 4 places) and no NPU entry
-        # (the real key reports CPU, GPU, Memory only). Protect stores the numbers untouched
-        # (M/606323:29-45) and its one consumer reads PsqlUsage against 0.8
-        # (M/617109:19-21), so fractions are the scale it expects; the UI never reads them.
+        # CONFIRMED from aikey-fw 2.2.8: `ui-websocketd` serves the object written by
+        # uaibd/hwmon/aikey_monitor.py, a flat {name,value} array whose CPU/GPU/Memory are
+        # fractions 0-1 (the monitor averages 1 s samples over 30 s, then 300 s, and divides
+        # the percentage by 100). Protect's UsageChart plots 100*value on a 0-100 axis
+        # (unifi-protect-ui-internal vantage.js, `y:100*e.value`), so raw percentages pin the
+        # graph at the top. Keep the reply fractions and do not add an NPU entry: CPU, GPU
+        # and Memory are the graph series, while the firmware's PsqlUsage/curTops entries are
+        # not implemented here. system_stats holds the cached block average.
         raw = collect_system_metrics()
-        ram_total = raw["ram"]["totalKilobytes"]
-        ram_avail = raw["ram"]["availableKilobytes"]
-        ram_used = ((ram_total - ram_avail) / ram_total) if ram_total else 0.0
+        ram_total = raw["ram"].get("totalKilobytes")
+        ram_avail = raw["ram"].get("availableKilobytes")
+        ram_used = raw["ram"].get("usedFraction")
+        if ram_used is None:
+            ram_used = ((ram_total - ram_avail) / ram_total
+                        if ram_total and ram_avail is not None else 0.0)
         metrics = [
             {"name": "CPU", "value": round((raw["cpu"]["load"] or 0.0) / 100, 4)},
             {"name": "GPU", "value": round((raw["gpu"]["load"] or 0.0) / 100, 4)},
@@ -1146,12 +1155,12 @@ def _warm_models():
         _warm_one("VLM", lambda: vlm_describe.describe(blank))
     if reid_model.enabled():
         _warm_one("re-ID", lambda: reid_model.embed(blank))
-    if _truthy(os.environ.get("DIYKEY_FACE")):
+    if _enabled(os.environ, "DIYKEY_FACE"):
         _warm_one("face", lambda: (face_recog._models.infer_fn() or (lambda _: None))(blank))
-    if _truthy(os.environ.get("DIYKEY_FACE_ENHANCE")):
+    if _enabled(os.environ, "DIYKEY_FACE_ENHANCE"):
         _warm_one("face enhance",
                   lambda: face_enhance.enhance(cv2.imencode(".jpg", blank)[1].tobytes()))
-    if _truthy(os.environ.get("DIYKEY_LPR")) and lpr.lpr_available():
+    if _enabled(os.environ, "DIYKEY_LPR") and lpr.lpr_available():
         _warm_one("LPR", lambda: lpr._alpr_reader(blank))
     _warm_ram_plus()
 
@@ -1416,11 +1425,12 @@ def _run_summary(console_host, mac_nosep, body, frames, scene):
 def _wanted_metas(body):
     """{"face": personMeta, "lpr": vehicleMeta} for the features this task should run.
 
-    Each needs the DIYKEY_* key (what we advertise) and Protect's AI setting: the firmware
-    deletes personMeta unless enableFaceRecognize (or pose) is on and vehicleMeta unless
-    enableLprRecognize is (aikey-fw 2.2.8 syswrapper.sh:2456-2482), and Protect only adds them
-    for cameras with the feature enabled on this processor (M/851272:421-425). faceMeta
-    (Protect's own face boxes) is passed separately as face_meta (see _handle_recognize)."""
+    Each is on by default, matching getInfo.featureFlags; its DIYKEY_* key is an explicit
+    off switch. Protect's AI setting is the second gate: the firmware deletes personMeta
+    unless enableFaceRecognize (or pose) is on and vehicleMeta unless enableLprRecognize is
+    (aikey-fw 2.2.8 syswrapper.sh:2456-2482), and Protect only adds them for cameras with
+    the feature enabled on this processor (M/851272:421-425). faceMeta (Protect's own face
+    boxes) is passed separately as face_meta (see _handle_recognize)."""
     metas = {}
     derived = _roi_derived_metas(body)
     # Live 2026-11-07, Protect 7.3.74: Settings > Intelligence > "Legacy Camera Enhancement"
@@ -1432,14 +1442,14 @@ def _wanted_metas(body):
     # recognition, so the per-processor flags are not consulted there. Other ramTypes keep
     # the 7.3.70 gates (explicit metas + enable flags).
     legacy = body.get("ramType") == "videoWithRecognition"
-    if _truthy(os.environ.get("DIYKEY_FACE")) and (
+    if _enabled(os.environ, "DIYKEY_FACE") and (
             legacy or ai_setting_enabled("enableFaceRecognize")):
         person = _flatten_meta(body.get("personMeta"))
         if not person and "person" in derived:
             person = derived["person"]
         if person:
             metas["face"] = person
-    if _truthy(os.environ.get("DIYKEY_LPR")) and (
+    if _enabled(os.environ, "DIYKEY_LPR") and (
             legacy or ai_setting_enabled("enableLprRecognize")):
         vehicle = _flatten_meta(body.get("vehicleMeta"))
         if not vehicle and "vehicle" in derived:
@@ -1699,7 +1709,7 @@ def _fetch_and_enhance(console_host, mac_nosep, req_url, name):
             os.remove(path)
         except OSError:
             pass
-    jpeg = face_enhance.enhance(original) if _truthy(os.environ.get("DIYKEY_FACE_ENHANCE")) \
+    jpeg = face_enhance.enhance(original) if _enabled(os.environ, "DIYKEY_FACE_ENHANCE") \
         else original
     return original, jpeg
 
@@ -2570,6 +2580,9 @@ def main():
         log.warning("AI Key Advanced alarms (natural-language Alarm Manager rules) won't fire "
                     "reliably -- missing: %s", ", ".join(missing))
     threading.Thread(target=_warm_models, daemon=True, name="diykey-warm").start()
+    # Keep the 1 s samples running from process start so Protect's 5-minute poll always
+    # gets a block average instead of a value sampled inside the RPC.
+    start_system_metrics_sampler()
     if os.environ.get("DIYKEY_NL_SEARCH", "1") != "0":
         threading.Thread(target=_nl_search_loop, args=(args.fallback_host_port, device_info),
                          daemon=True).start()

@@ -124,10 +124,12 @@ adoption; the token is single-use.
   actions are acked and logged for capture.
 - Tokenless reconnect with a pinned cert, single-use adoption tokens, and
   re-adoption watcher (readopt/unadopt forces a clean session).
-- Real RK3588 telemetry (CPU, GPU, NPU, memory) and a flat `systemMetrics` shape.
+- Real RK3588 telemetry (CPU, GPU, memory, plus NPU for diagnostics), sampled every
+  second and averaged over 30 s/300 s like the firmware, returned as 0-1 fractions
+  in `systemMetrics`.
 - Task plumbing for RAM/reverification results, multipart `ram` upload and the
   console's `/internal/aiprocessors/*` callbacks.
-- Shared config/state layer, per-instance systemd units, and 445 unit tests.
+- Shared config/state layer, per-instance systemd units, and 482 unit tests.
 - Wired AI work in `stage3_wss/`: SFace face recognition, fast-alpr plates, GFPGAN
   enhancement, VLM summaries, OSNet re-ID and per-camera scene memory.
 - Face detection (`RetinaFace_mobile320`) and embedding (`w600k_mbf`) running on
@@ -192,7 +194,7 @@ console pins the fingerprint.
 No hardware needed:
 
 ```bash
-cd diykey && python3 -m unittest discover -s tests -v   # 445 tests
+cd diykey && python3 -m unittest discover -s tests -v   # 482 tests
 ```
 
 Verified live on an Orange Pi 5 Plus against a real UNVR (2026-09-07): discovery,

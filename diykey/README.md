@@ -62,13 +62,16 @@ once real inference exists) not yet exercised.
   watches `adopt_state.json` for any token change to force a clean reconnect. Framing is
   the real 8-byte header with a **u32** length (`protocol.md` §3).
 - **`stage3_wss/system_stats.py`** — real RK3588 hardware stats (CPU via
-  `/proc/stat`, GPU via `/sys/class/devfreq/*.gpu/load`, NPU via
-  `/sys/kernel/debug/rknpu/load`, RAM, storage) feeding `systemMetrics`.
+  `/proc/stat`, GPU via `/sys/devices/platform/fb000000.gpu/utilisation` or
+  `/sys/class/devfreq/*.gpu/load`, NPU via `/sys/kernel/debug/rknpu/load`, RAM,
+  storage). A 1 s sampler publishes 30 s block averages for the first five
+  minutes and 300 s afterwards, matching `aikey_monitor.py`; `systemMetrics`
+  serves that cached average as 0-1 fractions.
 - **`stage2_grpc/`** — stub `ProtectAPI` gRPC server on `:50051`, real
   `.proto` contract. Kept running; not yet confirmed to be used by the
   live flow.
 - **`proto/`** — verbatim `.proto` files from the real `ui-uaibd` package.
-- **`tests/`** — 445 stdlib `unittest` cases covering the shared config/state layer,
+- **`tests/`** — 482 stdlib `unittest` cases covering the shared config/state layer,
   discovery TLVs, ucp4 framing/handlers, adopt persistence/certs, instance units and
   `run_all` wiring. `cd diykey && python3 -m unittest discover -s tests -v`.
 - **`stage5_faceid/`** — real face detection + embedding on the RK3588 NPU, standalone-tested

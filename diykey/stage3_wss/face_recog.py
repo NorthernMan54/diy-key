@@ -51,6 +51,20 @@ FACE_EMBED_MIN_NORM = float(os.environ.get("DIYKEY_FACE_EMBED_MIN_NORM") or 7.0)
 # 112 px, so that much enlargement leaves no identity. The firmware gates on model-based quality
 # instead (VerifyFaceQuality, EstimateFaceQuality); this approximates it. 0 keeps them all.
 FACE_MIN_PX = int(os.environ.get("DIYKEY_FACE_MIN_PX") or 40)
+# Cheap stand-ins for the AI Key's own face QA: ubnt_ai_infer_agent 2.2.8 runs SmartFace_lmk,
+# SmartFace_nonface_verifier and a crop quality model and skips "small face"/"large pose"/
+# "miss align" before embedding. We do not ship those models, so gate on what YuNet already
+# gives us: crop sharpness and landmark reprojection error. 55 live face crops (2026-11-22)
+# measured Laplacian variance 14-1402 (p10 34, median 182) and landmark RMS 16-34 px, so these
+# defaults only catch gross junk; a yawed face legitimately scores high. 0 disables a gate.
+FACE_MIN_SHARPNESS = float(os.environ.get("DIYKEY_FACE_MIN_SHARPNESS") or 20.0)
+FACE_MAX_ALIGN_RMS = float(os.environ.get("DIYKEY_FACE_MAX_ALIGN_RMS") or 45.0)
+FACE_MAX_LANDMARK_ERR = float(os.environ.get("DIYKEY_FACE_MAX_LANDMARK_ERR") or 80.0)
+# An unaligned embedding (a plain resize when YuNet finds nothing in Protect's face box) is
+# the kind of noise that makes a bad Protect cluster. Off by default; DIYKEY_FACE_UNALIGNED=1
+# restores the old path for comparison.
+FACE_UNALIGNED = (os.environ.get("DIYKEY_FACE_UNALIGNED") or "").strip().lower() in (
+    "1", "true", "yes", "on")
 # Faces sit in the top of a person box; search only this fraction of it (pi-port top_frac).
 PERSON_TOP_FRAC = 0.6
 # Person box grown by this factor before the search: the key frame can lag the box a little
@@ -75,6 +89,39 @@ FACE_MASK_CONF = float(os.environ.get("DIYKEY_FACE_MASK_CONF") or 90)
 # A Protect-supplied face box has no YuNet score; this stands in for eventTracks confidence.
 FACE_BOX_CONF = 90
 FACE_BOX_MARGIN = 1.4
+
+# ArcFace's 5-point template for a 112x112 aligned face: left eye, right eye, nose, left
+# mouth, right mouth. Used only to score landmark consistency, not to align the crop
+# (OpenCV's alignCrop does that).
+ARCFACE_DST = np.array([
+    [38.2946, 51.6963],
+    [73.5318, 51.5014],
+    [56.0252, 71.7366],
+    [41.5493, 92.3655],
+    [70.7299, 92.2041],
+], dtype=np.float32)
+
+
+def alignment_quality(landmarks):
+    """YuNet's 5 landmarks -> (rms_px, max_px) against ARCFACE_DST, or (None, None).
+
+    YuNet's row order is right eye, left eye, nose, right mouth, left mouth; ARCFACE_DST is
+    left eye first, so reorder. This is a gross-failure check, not a pose model: a yawed
+    face scores 16-34 px on our crops, so the default threshold is deliberately loose."""
+    try:
+        import cv2
+    except Exception:
+        return None, None
+    pts = np.asarray(landmarks, dtype=np.float32).reshape(-1, 2)
+    if pts.shape != (5, 2) or not np.all(np.isfinite(pts)):
+        return None, None
+    src = pts[[1, 0, 2, 4, 3]]
+    transform, _ = cv2.estimateAffinePartial2D(src, ARCFACE_DST, method=cv2.LMEDS)
+    if transform is None:
+        return None, None
+    projected = cv2.transform(src.reshape(1, 5, 2), transform).reshape(5, 2)
+    err = np.linalg.norm(projected - ARCFACE_DST, axis=1)
+    return float(np.sqrt(float(np.mean(err ** 2)))), float(np.max(err))
 
 
 def model_dir():
@@ -204,7 +251,18 @@ class _Models:
             if found is None:
                 return out
             for f in found:
-                emb = self._sface.feature(self._sface.alignCrop(crop, f))
+                aligned = self._sface.alignCrop(crop, f)
+                emb = self._sface.feature(aligned)
+                sharp = float(cv2.Laplacian(aligned, cv2.CV_64F).var())
+                rms, max_err = alignment_quality(f[4:14])
+                if (rms is None or rms > FACE_MAX_ALIGN_RMS
+                        or max_err > FACE_MAX_LANDMARK_ERR
+                        or sharp < FACE_MIN_SHARPNESS):
+                    log.debug("face dropped: %d px, score %.2f, sharp %.1f, align %.1f/%.1f",
+                              int(min(f[2], f[3])), float(f[14]), sharp,
+                              -1.0 if rms is None else rms,
+                              -1.0 if max_err is None else max_err)
+                    continue
                 out.append(((float(f[0]), float(f[1]), float(f[2]), float(f[3])),
                             float(f[14]), emb))
         return out
@@ -277,7 +335,9 @@ def build_face_result(camera_id, event_id, frames, person_meta, start_ms=None, i
     jpeg bytes}).
 
     face_meta: Protect's camera face boxes [{ts, roi:{coord:[x,y,w,h] 0..1000, trackerId,
-    ...}}] (roi may be a list). At those ts the boxes are cropped directly,     YuNet runs inside the box grown 40% (aligned embed), falling back to embed(crop) -> embedding, an unaligned resize, when it finds nothing; each
+    ...}}] (roi may be a list). At those ts the boxes are cropped directly, YuNet runs inside
+    the box grown 40%, and the aligned face is embedded. If YuNet finds nothing the box is
+    skipped unless DIYKEY_FACE_UNALIGNED=1, which restores the old plain-resize embed. Each
     box links to the one person box at that ts that contains it (>= 0.5 of the face, as
     M/321055). Person frames without face_meta use the person-box search above."""
     t0 = time.monotonic()
@@ -324,8 +384,9 @@ def build_face_result(camera_id, event_id, frames, person_meta, start_ms=None, i
                 continue  # none or ambiguous: Protect itself would not link it either
             tp = time.monotonic()
             # Grow the camera's box 40% and let YuNet find the face inside it: the aligned
-            # SFace crop embeds far better than a plain resize (the aligned path made the
-            # live face match). Unaligned resize only when YuNet finds nothing.
+            # SFace crop embeds far better than a plain resize. A plain resize is only used
+            # with DIYKEY_FACE_UNALIGNED=1; by default a box YuNet cannot find a face in is
+            # skipped rather than embedded unaligned.
             x1, y1, x2, y2 = _expand_px(fc, iw, ih, margin=FACE_BOX_MARGIN)
             bx1, by1 = max(0, int(fc[0] * iw / COORD_END)), max(0, int(fc[1] * ih / COORD_END))
             bx2, by2 = min(iw, int((fc[0] + fc[2]) * iw / COORD_END)), \
@@ -342,7 +403,7 @@ def build_face_result(camera_id, event_id, frames, person_meta, start_ms=None, i
                 if found:
                     (dx, dy, dw, dh), _, emb = max(found, key=lambda f: f[1] * f[0][2] * f[0][3])
                     box = (x1 + dx, y1 + dy, dw, dh)
-                else:
+                elif FACE_UNALIGNED:
                     if embed is None:
                         embed = _models.embed_fn()
                     emb = embed(frame[by1:by2, bx1:bx2]) if embed else None

@@ -39,7 +39,7 @@ python3 -m venv venv
 venv/bin/pip install -r diykey/requirements.txt
 # Then only the optional stacks you use: requirements-clip.txt, requirements-lpr.txt,
 # requirements-vlm.txt.
-venv/bin/python -m unittest discover -s diykey/tests   # 445 tests; model-dep tests skip if not installed
+venv/bin/python -m unittest discover -s diykey/tests   # 482 tests; model-dep tests skip if not installed
 ```
 
 ## Configure an instance
