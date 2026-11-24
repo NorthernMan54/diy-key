@@ -56,12 +56,28 @@ class FakeSession:
 
 def _reset():
     fe._session, fe._load_failed, fe._key = None, False, None
+    fe._yunet, fe._yunet_key = None, None
     fe._logged.clear()
 
 
+def _face_img(w=200, h=240):
+    """Flat background with a bright face-sized ellipse; landmarks placed like a frontal face."""
+    img = np.full((h, w, 3), (40, 90, 40), np.uint8)
+    cx, cy = w // 2, h // 2
+    cv2.ellipse(img, (cx, cy), (45, 60), 0, 0, 360, (150, 170, 210), -1)
+    lm = np.array([[cx - 20, cy - 15], [cx + 20, cy - 15], [cx, cy + 5],
+                   [cx - 17, cy + 28], [cx + 17, cy + 28]], np.float32)
+    return img, lm
+
+
 class FaceEnhanceTest(unittest.TestCase):
+    """The padded whole-crop path (no face found)."""
+
     def setUp(self):
         _reset()
+        p = mock.patch.object(fe, "_detect_landmarks", return_value=None)
+        p.start()
+        self.addCleanup(p.stop)
 
     def tearDown(self):
         _reset()
@@ -135,6 +151,64 @@ class FaceEnhanceTest(unittest.TestCase):
                 self.assertNotEqual(out, src)
                 self.assertEqual(ctor.call_count, 2)
                 self.assertIsNotNone(fe._session)
+
+
+class AlignedEnhanceTest(unittest.TestCase):
+    """GFPGAN wants FFHQ-aligned faces: warp to the template, restore, paste back feathered."""
+
+    def setUp(self):
+        _reset()
+
+    def tearDown(self):
+        _reset()
+
+    def test_frontal_landmarks_fit_template(self):
+        _, lm = _face_img()
+        m = fe._align_transform(lm)
+        self.assertIsNotNone(m)
+        # Eyes land near the template's eyes.
+        got = cv2.transform(lm[None], m)[0]
+        self.assertLess(np.abs(got[:2] - fe.FFHQ_512[:2]).max(), 25)
+
+    def test_mirrored_or_bad_landmarks_are_rejected(self):
+        _, lm = _face_img()
+        profile = lm.copy()
+        profile[:, 0] = lm[0, 0]  # every point on one vertical line, like a side view
+        self.assertIsNone(fe._align_transform(profile))
+        self.assertIsNone(fe._align_transform(np.full((5, 2), np.nan, np.float32)))
+        self.assertIsNone(fe._align_transform(np.zeros((3, 2), np.float32)))
+
+    def test_aligned_changes_face_keeps_background_and_size(self):
+        img, lm = _face_img()
+        sess = FakeSession()  # inverts: any pixel it touches changes a lot
+        with mock.patch.object(fe, "_detect_landmarks", return_value=lm):
+            out = fe._run(sess, img)
+        self.assertEqual(out.shape, img.shape)
+        self.assertEqual(sess.calls[0].shape, (1, 3, 512, 512))
+        h, w = img.shape[:2]
+        diff = np.abs(out.astype(int) - img.astype(int)).sum(axis=2)
+        self.assertGreater(diff[h // 2, w // 2], 100)  # the face was replaced
+        self.assertEqual(diff[:8, :8].max(), 0)  # corners untouched
+        self.assertEqual(diff[-8:, -8:].max(), 0)
+
+    def test_identity_model_roughly_round_trips(self):
+        img, lm = _face_img()
+        with mock.patch.object(fe, "_detect_landmarks", return_value=lm):
+            out = fe._run(FakeSession(invert=False), img)
+        self.assertLess(np.abs(out.astype(int) - img.astype(int)).mean(), 3)
+
+    def test_align_off_uses_padded_path(self):
+        img, lm = _face_img()
+        with mock.patch.object(fe, "_detect_landmarks", return_value=lm) as det, \
+                mock.patch.dict(os.environ, {fe.ENV_ALIGN: "0"}):
+            fe._run(FakeSession(), img)
+        det.assert_not_called()
+
+    def test_missing_yunet_warns_once_and_finds_nothing(self):
+        with mock.patch.dict(os.environ, {"DIYKEY_FACE_MODELS": "/nonexistent"}):
+            self.assertIsNone(fe._detect_landmarks(_face_img()[0]))
+            self.assertIsNone(fe._detect_landmarks(_face_img()[0]))
+        self.assertIn("no_yunet", fe._logged)
 
 
 class ProviderChoiceTest(unittest.TestCase):

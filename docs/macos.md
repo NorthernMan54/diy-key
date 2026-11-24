@@ -83,6 +83,7 @@ restart           touch to restart DIY-Key
 | `DIYKEY_E5=1` | multilingual-e5-small text encoder (`DIYKEY_E5_MODEL`, default `intfloat/multilingual-e5-small`, ~120 MB, CPU) for Deep Understanding session search: the 384-d query vector Protect asks for over `NL_PARSE` (`model: multilingual-e5-small`; Protect rejects CLIP there) and `descEmbedding` on each describe reply. Only deep mode uses it; Find Anything's normal search stays on CLIP |
 | `DIYKEY_FACE_MODELS` | Folder holding the YuNet and SFace `.onnx` files (default `<diykey>/models`) |
 | `DIYKEY_FACE_ENHANCE_MODEL` | GFPGAN v1.4 ONNX for face enhancement; unset = the original face is uploaded |
+| `DIYKEY_FACE_ENHANCE_ALIGN` | `0` turns off face alignment before GFPGAN (default on: YuNet from `DIYKEY_FACE_MODELS` aligns the face to GFPGAN's template; without YuNet, or when no face fits, the whole crop is enhanced) |
 | `DIYKEY_LPR_THRESH`, `DIYKEY_LPR_MIN_PX` | Plate-detector score floor (default 0.5) and minimum plate width in pixels (60) |
 | `DIYKEY_LPR_OCR_MIN` | Lowest per-character OCR confidence a plate may have before it is dropped (default 0.4); stops unreadable plates (IR flare, blur) being sent |
 | `DIYKEY_FACE_MIN_PX` | Narrowest face sent to Protect, in frame pixels (default 40; the camera-linked path keeps a 20 px floor) |
