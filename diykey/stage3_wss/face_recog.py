@@ -55,11 +55,14 @@ FACE_MIN_PX = int(os.environ.get("DIYKEY_FACE_MIN_PX") or 40)
 # SmartFace_nonface_verifier and a crop quality model and skips "small face"/"large pose"/
 # "miss align" before embedding. We do not ship those models, so gate on what YuNet already
 # gives us: crop sharpness and landmark reprojection error. 55 live face crops (2026-11-22)
-# measured Laplacian variance 14-1402 (p10 34, median 182) and landmark RMS 16-34 px, so these
-# defaults only catch gross junk; a yawed face legitimately scores high. 0 disables a gate.
+# measured Laplacian variance 14-1402 (p10 34, median 182). Landmark error, 39 YuNet faces from
+# live frames (2026-11-23, after fixing a mirrored landmark order that read 15-33 px for every
+# face): RMS median 3.3 px, p90 7.9; three-quarter views up to 10.6; full profiles (both eyes at
+# one x, the AI Key's "large pose") 16-21 RMS / 21-33 max. The defaults drop the profiles and
+# keep the three-quarter views. 0 disables a gate.
 FACE_MIN_SHARPNESS = float(os.environ.get("DIYKEY_FACE_MIN_SHARPNESS") or 20.0)
-FACE_MAX_ALIGN_RMS = float(os.environ.get("DIYKEY_FACE_MAX_ALIGN_RMS") or 45.0)
-FACE_MAX_LANDMARK_ERR = float(os.environ.get("DIYKEY_FACE_MAX_LANDMARK_ERR") or 80.0)
+FACE_MAX_ALIGN_RMS = float(os.environ.get("DIYKEY_FACE_MAX_ALIGN_RMS") or 12.0)
+FACE_MAX_LANDMARK_ERR = float(os.environ.get("DIYKEY_FACE_MAX_LANDMARK_ERR") or 20.0)
 # An unaligned embedding (a plain resize when YuNet finds nothing in Protect's face box) is
 # the kind of noise that makes a bad Protect cluster. Off by default; DIYKEY_FACE_UNALIGNED=1
 # restores the old path for comparison.
@@ -105,9 +108,12 @@ ARCFACE_DST = np.array([
 def alignment_quality(landmarks):
     """YuNet's 5 landmarks -> (rms_px, max_px) against ARCFACE_DST, or (None, None).
 
-    YuNet's row order is right eye, left eye, nose, right mouth, left mouth; ARCFACE_DST is
-    left eye first, so reorder. This is a gross-failure check, not a pose model: a yawed
-    face scores 16-34 px on our crops, so the default threshold is deliberately loose."""
+    YuNet's row order is right eye, left eye, nose, right mouth, left mouth, the subject's
+    right being the image's left (on live crops "right eye" x is always the smaller). That is
+    ARCFACE_DST's order too (image-left eye first), so no reorder; OpenCV's alignCrop maps them
+    the same way. Reordering mirrors the face, which a rotation+scale fit can't undo: every
+    face then read 15-33 px. Not a pose model, but a full profile scores well above a
+    frontal face, so the gate doubles as a "large pose" check."""
     try:
         import cv2
     except Exception:
@@ -115,7 +121,7 @@ def alignment_quality(landmarks):
     pts = np.asarray(landmarks, dtype=np.float32).reshape(-1, 2)
     if pts.shape != (5, 2) or not np.all(np.isfinite(pts)):
         return None, None
-    src = pts[[1, 0, 2, 4, 3]]
+    src = pts
     transform, _ = cv2.estimateAffinePartial2D(src, ARCFACE_DST, method=cv2.LMEDS)
     if transform is None:
         return None, None

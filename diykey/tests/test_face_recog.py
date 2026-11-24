@@ -203,19 +203,37 @@ class AlignmentQualityTest(unittest.TestCase):
     """The cheap stand-in for the AI Key's SmartFace_lmk + QA models."""
 
     def test_perfect_template_has_no_error(self):
-        # YuNet order: right eye, left eye, nose, right mouth, left mouth
-        pts = face_recog.ARCFACE_DST[[1, 0, 2, 4, 3]]
+        # YuNet order (right eye = image-left) is ARCFACE_DST's order.
+        pts = face_recog.ARCFACE_DST.copy()
         rms, max_err = face_recog.alignment_quality(pts)
         self.assertIsNotNone(rms)
         self.assertLess(rms, 0.01)
         self.assertLess(max_err, 0.01)
 
     def test_moved_landmark_is_flagged(self):
-        pts = face_recog.ARCFACE_DST[[1, 0, 2, 4, 3]].copy()
+        pts = face_recog.ARCFACE_DST.copy()
         pts[2, 0] += 120.0
         rms, max_err = face_recog.alignment_quality(pts)
         self.assertGreater(rms, face_recog.FACE_MAX_ALIGN_RMS)
         self.assertGreater(max_err, face_recog.FACE_MAX_LANDMARK_ERR)
+
+    def test_mirrored_landmarks_fail_and_frontal_passes(self):
+        # A frontal face with small detector noise passes; the same points with left and
+        # right swapped (the old bug) can't be fitted by rotation+scale and fail.
+        noisy = face_recog.ARCFACE_DST + np.array(
+            [[1, -1], [-1, 1], [1, 1], [-1, -1], [1, 0]], np.float32)
+        rms, max_err = face_recog.alignment_quality(noisy)
+        self.assertLess(rms, face_recog.FACE_MAX_ALIGN_RMS)
+        self.assertLess(max_err, face_recog.FACE_MAX_LANDMARK_ERR)
+        rms, _ = face_recog.alignment_quality(noisy[[1, 0, 2, 4, 3]])
+        self.assertGreater(rms, face_recog.FACE_MAX_ALIGN_RMS)
+
+    def test_profile_is_dropped(self):
+        # Live profile (2026-11-23): both eyes at one x, mouth corners stacked.
+        pts = np.array([[819, 889], [820, 889], [826, 900], [819, 911], [818, 913]],
+                       np.float32)
+        rms, _ = face_recog.alignment_quality(pts)
+        self.assertGreater(rms, face_recog.FACE_MAX_ALIGN_RMS)
 
     def test_bad_shape_is_rejected(self):
         self.assertEqual(face_recog.alignment_quality([1, 2, 3, 4]), (None, None))
