@@ -1513,15 +1513,32 @@ def _merge_images(images, new, source, event_id):
         images[key] = jpeg
 
 
-def _vlm_frame(body, frames):
-    """The still for the auto summary: the firmware's VLM agent uses the RAM key frame, else
-    the first thumbnail frame, else the first key-moment frame (aikey-fw 2.2.8 ui-vlm-agent
-    app.py:343-348). We keep no "best" frame, so: first thumbnail, else the middle key moment."""
-    for ms in body.get("thumbnailMs") or []:
+def _vlm_key_ms(body, frames):
+    """The ms of the still for the auto summary, picked like the AI Key 2.2.8 infer agent's
+    keyFrameFile: of the thumbnailMeta moments (one full frame each), the one whose objects'
+    confidences sum highest, the earliest on a tie. Without one, the first thumbnailMs frame
+    (diy-key only), else the first key moment, as ui-vlm-agent falls back. None without a frame."""
+    sums = {}
+    for entry in _flatten_meta(body.get("thumbnailMeta")):
+        try:
+            ts = int(float(entry["ts"]))
+            conf = float(entry["roi"].get("confidence") or 0)
+        except (TypeError, ValueError):
+            continue
+        if ts in frames:
+            sums[ts] = sums.get(ts, 0.0) + conf
+    if sums:
+        return max(sums, key=lambda ts: sums[ts])  # dicts keep order: first max wins
+    for ms in list(body.get("thumbnailMs") or []) + sorted(body.get("keyMoments") or []):
         if ms in frames:
-            return frames[ms]
-    moments = [ms for ms in sorted(body.get("keyMoments") or []) if ms in frames]
-    return frames[moments[len(moments) // 2]] if moments else None
+            return ms
+    return None
+
+
+def _vlm_frame(body, frames):
+    """Path of the frame _vlm_key_ms picks, or None."""
+    ms = _vlm_key_ms(body, frames)
+    return frames[ms] if ms is not None else None
 
 
 # What triggered the event, for the auto summary. The firmware's auto summary gets no object
@@ -1530,7 +1547,6 @@ def _vlm_frame(body, frames):
 # passing cars were summarised as "Red car parked in driveway" from the whole frame.
 VLM_CROP_SCALE = 3.0  # Driveway's boxes land about 1 s off fast cars, so a tight crop misses them
 VLM_EDGE_MARGIN = 20      # on 0..1000: a box this close to the frame edge is cut off or too near
-VLM_MAX_BOX_AREA = 0.4    # fraction of the frame: a box bigger than this is right at the lens
 VLM_EDGE_VEHICLE_SCALE = 1.5  # see _vlm_event_crop
 _VLM_KIND = {"person": "person", "vehicle": "vehicle", "car": "vehicle", "truck": "vehicle",
              "bus": "vehicle", "motorcycle": "vehicle", "bicycle": "vehicle", "animal": "animal",
@@ -1570,27 +1586,18 @@ def _event_triggers(body):
     return []
 
 
-def _vlm_box_is_clear(coord):
-    """False for a box touching the frame edge or filling most of it. Live 2026-11-08 19:36
-    Doorbell: the largest box [41, 111, 544, 880] was the walker right beside the camera, blown
-    out by the IR light with the head blurred, and the summary said "walking into a dark room";
-    the standing frame a second earlier had a clear box."""
-    return not _vlm_box_at_edge(coord) and coord[2] * coord[3] <= VLM_MAX_BOX_AREA * 1000 * 1000
-
-
 def _vlm_box_at_edge(coord):
     x, y, w, h = coord
     return (x < VLM_EDGE_MARGIN or y < VLM_EDGE_MARGIN or x + w > 1000 - VLM_EDGE_MARGIN
             or y + h > 1000 - VLM_EDGE_MARGIN)
 
 
-def _vlm_trigger(triggers, frames):
-    """The trigger box to describe, from those we have a frame for: a person if there is one,
-    then the largest clear box, or the largest of any if none is clear. None without a frame."""
-    usable = [t for t in triggers if t["ts"] in frames]
-    group = [t for t in usable if t["objectType"] == "person"] or usable
-    clear = [t for t in group if _vlm_box_is_clear(t["coord"])]
-    return max(clear or group, key=lambda t: t["coord"][2] * t["coord"][3], default=None)
+def _vlm_trigger(triggers, key_ms):
+    """The trigger box to describe on the key frame: a person if there is one, else the
+    largest box. None when the key frame has no box."""
+    group = [t for t in triggers if t["ts"] == key_ms]
+    group = [t for t in group if t["objectType"] == "person"] or group
+    return max(group, key=lambda t: t["coord"][2] * t["coord"][3], default=None)
 
 
 def _vlm_event_crop(img, coord, object_type=None):
@@ -1625,7 +1632,7 @@ def _vlm_event_subject(body, frames):
     import cv2
     if not _truthy(os.environ.get("DIYKEY_VLM_EVENT_CONTEXT", "1")):
         return None, None
-    trigger = _vlm_trigger(_event_triggers(body), frames)
+    trigger = _vlm_trigger(_event_triggers(body), _vlm_key_ms(body, frames))
     img = cv2.imread(frames[trigger["ts"]]) if trigger else None
     crop = _vlm_event_crop(img, trigger["coord"], trigger["objectType"]) if img is not None else None
     return (crop, _vlm_context(trigger)) if crop is not None else (None, None)

@@ -1276,8 +1276,21 @@ class TestRecognizePostVlm(_RecognizeTest):
         frames = {1: "a", 2: "b", 3: "c", 4: "d"}
         self.assertEqual(ucp4_client._vlm_frame({"thumbnailMs": [9, 3], "keyMoments": [1]},
                                                 frames), "c")
-        self.assertEqual(ucp4_client._vlm_frame({"keyMoments": [4, 1, 2]}, frames), "b")
+        self.assertEqual(ucp4_client._vlm_frame({"keyMoments": [4, 1, 2]}, frames), "a")
         self.assertIsNone(ucp4_client._vlm_frame({"keyMoments": [7]}, frames))
+
+    def test_frame_with_highest_summed_confidence(self):
+        frames = {1: "a", 2: "b", 3: "c"}
+        meta = [{"ts": 1, "roi": [{"confidence": 90}]},
+                {"ts": 2, "roi": [{"confidence": 60}, {"confidence": 50}]},
+                {"ts": 3, "roi": [{"confidence": 95}]},
+                {"ts": 9, "roi": [{"confidence": 99}]}]  # no frame for it
+        self.assertEqual(ucp4_client._vlm_frame({"thumbnailMeta": meta}, frames), "b")
+
+    def test_earliest_frame_wins_a_tie(self):
+        frames = {1: "a", 2: "b"}
+        meta = [{"ts": 2, "roi": [{"confidence": 80}]}, {"ts": 1, "roi": [{"confidence": 80}]}]
+        self.assertEqual(ucp4_client._vlm_frame({"thumbnailMeta": meta}, frames), "b")
 
 
 class TestVlmEventContext(_RecognizeTest):
@@ -1339,43 +1352,22 @@ class TestVlmEventContext(_RecognizeTest):
         self.assertEqual(describe.call_args.args[0].shape[:2], (300, 300))
 
     def test_prefers_a_person_then_the_largest(self):
-        frames = {self.MS: "x"}
         big = {"ts": self.MS, "coord": [0, 0, 500, 500], "objectType": "vehicle"}
         person = {"ts": self.MS, "coord": [0, 0, 10, 10], "objectType": "person"}
         small = {"ts": self.MS, "coord": [0, 0, 5, 5], "objectType": "person"}
-        self.assertIs(ucp4_client._vlm_trigger([big, small, person], frames), person)
-        self.assertIs(ucp4_client._vlm_trigger([big], frames), big)
+        self.assertIs(ucp4_client._vlm_trigger([big, small, person], self.MS), person)
+        self.assertIs(ucp4_client._vlm_trigger([big], self.MS), big)
 
-    def _boxes(self, *coords, otype="person"):
-        return [{"ts": self.MS + i, "coord": list(c), "objectType": otype}
-                for i, c in enumerate(coords)]
+    def test_only_boxes_on_the_key_frame(self):
+        on = {"ts": self.MS, "coord": [0, 0, 10, 10], "objectType": "vehicle"}
+        off = {"ts": self.MS + 1, "coord": [0, 0, 500, 500], "objectType": "person"}
+        self.assertIs(ucp4_client._vlm_trigger([off, on], self.MS), on)
+        self.assertIsNone(ucp4_client._vlm_trigger([off], self.MS))
 
-    def test_live_doorbell_walk_by_skips_the_blown_out_close_up(self):
-        # 2026-11-08 19:36 Doorbell thumbnailMeta, in Protect's order.
-        boxes = self._boxes((348, 334, 326, 589), (41, 111, 544, 880), (255, 305, 462, 681))
-        frames = {t["ts"]: "x" for t in boxes}
-        self.assertIs(ucp4_client._vlm_trigger(boxes, frames), boxes[0])
-
-    def test_largest_of_the_clear_boxes(self):
-        boxes = self._boxes((100, 100, 100, 100), (300, 300, 300, 300))
-        self.assertIs(ucp4_client._vlm_trigger(boxes, {t["ts"]: "x" for t in boxes}), boxes[1])
-
-    def test_a_box_at_any_edge_or_too_big_is_not_clear(self):
-        for coord in ((0, 300, 100, 100), (300, 5, 100, 100), (900, 300, 95, 100),
-                      (300, 900, 100, 95), (100, 100, 700, 700)):
-            self.assertFalse(ucp4_client._vlm_box_is_clear(list(coord)), coord)
-        self.assertTrue(ucp4_client._vlm_box_is_clear([100, 100, 500, 500]))
-
-    def test_falls_back_to_the_largest_when_none_is_clear(self):
-        boxes = self._boxes((0, 0, 100, 100), (0, 0, 300, 300))
-        self.assertIs(ucp4_client._vlm_trigger(boxes, {t["ts"]: "x" for t in boxes}), boxes[1])
-
-    def test_a_person_at_the_edge_still_beats_a_clear_vehicle(self):
-        person = self._boxes((0, 0, 100, 100))
-        vehicle = self._boxes((300, 300, 200, 200), otype="vehicle")
-        vehicle[0]["ts"] = self.MS + 9
-        frames = {self.MS: "x", self.MS + 9: "x"}
-        self.assertIs(ucp4_client._vlm_trigger(vehicle + person, frames), person[0])
+    def test_edge_box_is_not_skipped(self):
+        # The firmware has no edge rule: an edge box on the key frame is still described.
+        edge = {"ts": self.MS, "coord": [0, 0, 900, 900], "objectType": "person"}
+        self.assertIs(ucp4_client._vlm_trigger([edge], self.MS), edge)
 
     def test_person_context(self):
         describe = self._summarise(self._meta(otype="person"))
