@@ -305,6 +305,25 @@ class EmbeddingListTest(unittest.TestCase):
         self.assertEqual(face_recog._embedding_list(np.zeros(2)), [0.0, 0.0])
 
 
+class TestInferRuns(unittest.TestCase):
+    """Regression: _infer used cv2 without importing it (NameError on every face, 11-24)."""
+
+    def test_infer_with_a_detected_face(self):
+        try:
+            import cv2  # noqa: F401
+        except ImportError:
+            self.skipTest("cv2 not installed")
+        m = face_recog._Models()
+        row = np.array([10, 10, 40, 40, 20, 22, 40, 22, 30, 30, 22, 40, 38, 40, 0.9],
+                       np.float32)
+        m._yunet = mock.Mock()
+        m._yunet.detect.return_value = (1, np.array([row]))
+        m._sface = mock.Mock()
+        m._sface.alignCrop.return_value = np.zeros((112, 112, 3), np.uint8)
+        m._sface.feature.return_value = np.ones((1, 128), np.float32)
+        self.assertIsInstance(m._infer(np.zeros((64, 64, 3), np.uint8)), list)
+
+
 if __name__ == "__main__":
     unittest.main()
 

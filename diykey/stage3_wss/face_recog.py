@@ -250,6 +250,7 @@ class _Models:
 
     def _infer(self, crop):
         """BGR crop -> [((x,y,w,h) crop px, score, embedding)]."""
+        import cv2
         out = []
         with self._lock:
             self._yunet.setInputSize((crop.shape[1], crop.shape[0]))
