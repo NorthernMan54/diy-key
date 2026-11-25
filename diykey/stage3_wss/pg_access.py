@@ -15,7 +15,7 @@ the console being connected to and reloads PostgreSQL. It then checks that:
 
 * the file parses (``pg_hba_file_rules.error``; PostgreSQL keeps its old rules on a bad file),
 * the reload happened (``pg_conf_load_time()`` moved),
-* PostgreSQL accepts TCP on the key's address, and
+* PostgreSQL's ``listen_addresses`` covers the key's address, and
 * a few minutes later, Protect has opened a session (``pg_stat_database.sessions`` for
   ``unifi-protect`` went up). If not, it logs the refusals from the PostgreSQL log.
 
@@ -38,7 +38,6 @@ log = logging.getLogger("pg-access")
 
 MARKER = "# DIY-Key: only the Protect console, only over SSL."
 _RULE_RE = re.compile(r"^\s*hostssl\s+unifi-protect\s+unifi-protect\s+\S+\s+scram-sha-256\s*$")
-PG_PORT = 5432
 # Protect connects right after the ucp4 socket opens, then retries with backoff (10 s, 20 s,
 # 40 s, 80 s: aiprocessors.db.log). Three minutes covers that first round.
 SESSION_CHECK_DELAY = 180.0
@@ -213,12 +212,18 @@ def admits(address):
     return False
 
 
-def listening(bind_ip, port=None, timeout=2.0):
-    try:
-        with socket.create_connection((bind_ip, port or PG_PORT), timeout=timeout):
-            return True
-    except OSError:
-        return False
+def listens_on(bind_ip):
+    """True when the server's ``listen_addresses`` covers ``bind_ip``.
+
+    Asked of the server, not by connecting: on Flynn (2026-11-25) a TCP connect from the Mac to
+    its own alias 192.168.1.18:5432 timed out while PostgreSQL listened there and Protect, from
+    another host, connected fine."""
+    raw = _query("SHOW listen_addresses;")[0][0]
+    addrs = {a.strip() for a in raw.split(",") if a.strip()}
+    if "*" in addrs or bind_ip in addrs:
+        return True
+    wildcard = "::" if ipaddress.ip_address(bind_ip).version == 6 else "0.0.0.0"
+    return wildcard in addrs
 
 
 def protect_sessions():
@@ -275,12 +280,12 @@ def ensure_console(host, bind_ip=None, session_check_delay=SESSION_CHECK_DELAY):
                         address)
             return False
         baseline = protect_sessions()
+        # A warning, not a stop: the session check later says whether Protect got in anyway.
+        if bind_ip and bind_ip not in ("0.0.0.0", "::") and not listens_on(bind_ip):
+            log.warning("PostgreSQL's listen_addresses doesn't include %s, so Protect can't reach "
+                        "it there; check postgresql.conf", bind_ip)
     except (PgAccessError, OSError, IndexError, ValueError) as e:
         log.info("PostgreSQL access not checked: %s", e)
-        return False
-    if bind_ip and bind_ip not in ("0.0.0.0", "::") and not listening(bind_ip):
-        log.warning("PostgreSQL isn't accepting connections on %s:%d; check listen_addresses "
-                    "in postgresql.conf", bind_ip, PG_PORT)
         return False
     log.info("PostgreSQL access: console %s admitted%s", address,
              " (rule updated and reloaded)" if changed else "")

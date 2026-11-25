@@ -90,6 +90,25 @@ class TestAdmits(unittest.TestCase):
                                         "255.255.255.255"]]))
 
 
+class TestListensOn(unittest.TestCase):
+    def _listens(self, value, ip="192.168.1.18"):
+        with mock.patch.object(pg_access, "_query", return_value=[[value]]):
+            return pg_access.listens_on(ip)
+
+    def test_own_address(self):
+        self.assertTrue(self._listens("192.168.1.18"))
+        self.assertTrue(self._listens("localhost, 192.168.1.18"))
+
+    def test_wildcards(self):
+        self.assertTrue(self._listens("*"))
+        self.assertTrue(self._listens("0.0.0.0"))
+        self.assertTrue(self._listens("::", ip="fd00::5"))
+
+    def test_other_address(self):
+        self.assertFalse(self._listens("192.168.1.23"))
+        self.assertFalse(self._listens("localhost"))
+
+
 class TestWritePreserving(unittest.TestCase):
     def test_keeps_mode_and_replaces_content(self):
         d = tempfile.mkdtemp()
@@ -119,7 +138,7 @@ class TestEnsureConsole(unittest.TestCase):
                               side_effect=lambda: calls.append("reload") or reloaded),
             mock.patch.object(pg_access, "admits", return_value=admitted),
             mock.patch.object(pg_access, "protect_sessions", return_value=4),
-            mock.patch.object(pg_access, "listening", return_value=listening),
+            mock.patch.object(pg_access, "listens_on", return_value=listening),
             mock.patch.dict(os.environ, env or {}),
         ]
         for p in patches:
@@ -154,11 +173,11 @@ class TestEnsureConsole(unittest.TestCase):
         self.assertEqual(calls, [])
         self.assertIn("no hostssl rule", "\n".join(logs.output))
 
-    def test_not_listening(self):
+    def test_not_listening_warns_but_keeps_going(self):
         with self.assertLogs("pg-access", level="WARNING") as logs:
             ok, _ = self._run(listening=False)
-        self.assertFalse(ok)
-        self.assertIn("listen_addresses", "\n".join(logs.output))
+        self.assertTrue(ok)  # the session check still runs and has the last word
+        self.assertIn("listen_addresses doesn't include 192.168.1.18", "\n".join(logs.output))
 
     def test_no_postgres_on_this_host(self):
         with mock.patch.object(pg_access, "psql_cmd", return_value=(None, "no DIYKEY_PG_SOCKET")):
@@ -249,9 +268,6 @@ class TestAgainstRealPostgres(unittest.TestCase):
         env = {"DIYKEY_PG_SOCKET": self.data, "DIYKEY_PG_BIN": self.bin,
                "PGPORT": str(self.port), "DIYKEY_PG_LOG": os.path.join(self.dir, "postgres.log")}
         p = mock.patch.dict(os.environ, env)
-        p.start()
-        self.addCleanup(p.stop)
-        p = mock.patch.object(pg_access, "PG_PORT", self.port)
         p.start()
         self.addCleanup(p.stop)
 
