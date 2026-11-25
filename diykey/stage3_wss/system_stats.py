@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Real RK3588 hardware stats for the `systemMetrics` ucp4 RPC.
+"""Real hardware stats for the `systemMetrics` ucp4 RPC (RK3588 Linux, or macOS).
 
 The reply is a flat array of {name, value} fractions. That shape and scale come from the
 real key's 2.2.8 firmware: ``uaibd/hwmon/aikey_monitor.py`` samples every second, averages
@@ -14,10 +14,20 @@ The scale matters: Protect's UsageChart plots ``100*value`` against a 0-100 axis
 pins CPU and Memory at the top of the graph, which is what the old pre-restructure build
 did. Internally CPU/GPU are 0-100 and become 0-1 in the RPC; Memory is already 0-1
 used/total.
+
+macOS has no /proc or /sys, so every Linux reader returned None and the RPC sent 0.0 for
+everything (wasaga, 11-21 to 11-25). On Darwin, CPU ticks and memory come from mach
+host_statistics (the counters top and vm_stat use) and GPU load from the IOAccelerator
+"Device Utilization %" that ioreg reports, all without root or extra packages.
 """
+import ctypes
+import ctypes.util
 import glob
 import logging
 import os
+import re
+import subprocess
+import sys
 import threading
 import time
 
@@ -159,6 +169,86 @@ def _read_npu_load_percent():
     if not loads:
         return None
     return round(sum(loads) / len(loads), 1)
+
+
+# --- macOS -------------------------------------------------------------------------------
+
+IS_DARWIN = sys.platform == "darwin"
+_HOST_CPU_LOAD_INFO = 3       # mach/host_info.h
+_HOST_VM_INFO64 = 4           # mach/host_info.h
+_VM_INFO64_COUNT = 38         # sizeof(vm_statistics64_data_t) / sizeof(integer_t)
+_libc = None
+
+
+def _mach():
+    global _libc
+    if _libc is None:
+        _libc = ctypes.CDLL(ctypes.util.find_library("c"))
+        _libc.mach_host_self.restype = ctypes.c_uint
+    return _libc
+
+
+def _host_statistics(flavor, count, fn="host_statistics"):
+    """Raw integer_t words of a host_statistics(64) flavor, or None."""
+    libc = _mach()
+    buf = (ctypes.c_uint32 * count)()
+    n = ctypes.c_uint32(count)
+    if getattr(libc, fn)(libc.mach_host_self(), flavor, buf, ctypes.byref(n)) != 0:
+        return None
+    return list(buf)
+
+
+def _darwin_cpu_times():
+    """(idle ticks, total ticks) over all cores: user, system, idle, nice."""
+    ticks = _host_statistics(_HOST_CPU_LOAD_INFO, 4)
+    if ticks is None:
+        raise OSError("host_statistics(HOST_CPU_LOAD_INFO) failed")
+    return ticks[2], sum(ticks)
+
+
+def _darwin_memsize():
+    libc = _mach()
+    size = ctypes.c_uint64(0)
+    n = ctypes.c_size_t(ctypes.sizeof(size))
+    if libc.sysctlbyname(b"hw.memsize", ctypes.byref(size), ctypes.byref(n), None, 0) != 0:
+        return None
+    return size.value
+
+
+def _darwin_used_bytes(words, page_size):
+    """Activity Monitor's "Memory Used": app memory (internal - purgeable) + wired +
+    compressed, from vm_statistics64 words (wire 3, purgeable 25, compressor 34,
+    internal 37)."""
+    wired, purgeable, compressed, internal = words[3], words[25], words[34], words[37]
+    return (max(0, internal - purgeable) + wired + compressed) * page_size
+
+
+def _darwin_ram_kb():
+    total = _darwin_memsize()
+    words = _host_statistics(_HOST_VM_INFO64, _VM_INFO64_COUNT, "host_statistics64")
+    if not total or words is None:
+        return total // 1024 if total else None, None
+    used = _darwin_used_bytes(words, os.sysconf("SC_PAGE_SIZE"))
+    return total // 1024, max(0, total - used) // 1024
+
+
+_GPU_UTIL = re.compile(rb'"Device Utilization %"=(\d+)')
+
+
+def _darwin_gpu_load_percent():
+    try:
+        out = subprocess.run(["/usr/sbin/ioreg", "-r", "-d1", "-c", "IOAccelerator"],
+                             capture_output=True, timeout=2, check=False).stdout
+    except (OSError, subprocess.SubprocessError):
+        return None
+    m = _GPU_UTIL.search(out)
+    return float(m.group(1)) if m else None
+
+
+if IS_DARWIN:
+    _read_cpu_times = _darwin_cpu_times  # noqa: F811
+    _read_ram_kb = _darwin_ram_kb  # noqa: F811
+    _read_gpu_load_percent = _darwin_gpu_load_percent  # noqa: F811
 
 
 class _MetricsSampler:

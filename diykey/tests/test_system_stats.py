@@ -86,5 +86,30 @@ class TestCollect(unittest.TestCase):
         self.assertEqual(raw["ram"]["usedFraction"], 0.5)
 
 
+class TestDarwin(unittest.TestCase):
+    """macOS readers: wasaga sent 0.0 for CPU/GPU/Memory because only /proc was read."""
+
+    def test_used_bytes_is_app_plus_wired_plus_compressed(self):
+        words = [0] * 38
+        words[3], words[25], words[34], words[37] = 100, 20, 50, 300  # wired, purgeable, compressed, internal
+        self.assertEqual(system_stats._darwin_used_bytes(words, 16384), (280 + 100 + 50) * 16384)
+
+    def test_gpu_parses_ioreg(self):
+        out = b'"PerformanceStatistics" = {"Renderer Utilization %"=5,"Device Utilization %"=68}'
+        with mock.patch.object(system_stats.subprocess, "run",
+                               return_value=mock.Mock(stdout=out)):
+            self.assertEqual(system_stats._darwin_gpu_load_percent(), 68.0)
+        with mock.patch.object(system_stats.subprocess, "run", side_effect=OSError):
+            self.assertIsNone(system_stats._darwin_gpu_load_percent())
+
+    @unittest.skipUnless(sys.platform == "darwin", "macOS only")
+    def test_live_readers_return_values(self):
+        idle, total = system_stats._read_cpu_times()
+        self.assertGreater(total, idle)
+        total_kb, avail_kb = system_stats._read_ram_kb()
+        self.assertGreater(total_kb, avail_kb)
+        self.assertTrue(0.0 < system_stats._ram_used_fraction() < 1.0)
+
+
 if __name__ == "__main__":
     unittest.main()
