@@ -61,7 +61,9 @@ restart           touch to restart DIY-Key
 2. **Write `~/.diy-key/<name>/diykey.env`** from `scripts/diykey.env.example`: a new MAC
    (`FCECDA` + 6 random hex digits), device ID and GUID (`uuidgen | tr A-Z a-z`), the bind IP and
    the console address. Keep the identity fixed once adopted.
-3. **Create the instance's PostgreSQL** (listens on the bind IP, admits only the console over SSL):
+3. **Create the instance's PostgreSQL** (listens on the bind IP, admits only the console over SSL;
+   each ucp4 connect moves that rule to the console being connected to, so a console that moves or
+   re-adopts the key still gets in):
    ```bash
    DIYKEY_INSTANCE=<name> scripts/diykey_pg_init.sh
    ```
@@ -72,7 +74,7 @@ restart           touch to restart DIY-Key
 |---|---|
 | `DIYKEY_IFACE`, `DIYKEY_MAC`, `DIYKEY_DEVICE_ID`, `DIYKEY_GUID`, `DIYKEY_HOSTNAME` | Identity (required except hostname) |
 | `DIYKEY_BIND_IP` | The instance's own address: listeners, outbound ucp4 and nl-search, PostgreSQL |
-| `DIYKEY_CONSOLE_HOST` | Console address (tokenless reconnect, PostgreSQL access rule) |
+| `DIYKEY_CONSOLE_HOST` | Console address for the tokenless reconnect. The PostgreSQL access rule follows the adopted console (`adopt_state.json` hosts), so it's only the starting rule |
 | `DIYKEY_RAM_MODEL` | COCO ONNX detector for tags, verification and crops; also advertises Recognize Anything and retroactive processing. Unset = no RAM result |
 | `DIYKEY_CLIP=1` | CLIP ViT-L/14 embeddings: per-object rows for search, query embeddings |
 | `DIYKEY_FACE`, `DIYKEY_LPR`, `DIYKEY_FACE_ENHANCE` | `1` to advertise face recognition, licence plates, face enhancement (default off) |
@@ -106,6 +108,7 @@ restart           touch to restart DIY-Key
 | `DIYKEY_FW_VERSION`, `DIYKEY_DISCOVERY_FW_VERSION` | Factory firmware; a simulated update pins newer in `state/fw_version.json` |
 | `DIYKEY_FW_DIR`, `DIYKEY_FW_DOWNLOAD`, `DIYKEY_FAKE_UPDATE_S` | Where offered firmware is kept (default `~/.diy-key/firmware`), whether, and how long the fake install takes |
 | `DIYKEY_PG`, `DIYKEY_PG_BIN` | `0` to run without the instance's PostgreSQL; Homebrew `postgresql@17` bin dir |
+| `DIYKEY_PG_HBA_SYNC` | `0` to leave `pg_hba.conf` alone. The connect-time checks still run: rule present, file parses, PostgreSQL listening, and Protect opened a session within 3 minutes (log `pg-access`) |
 | `DIYKEY_DEBUG`, `DIYKEY_DEBUG_LOGGERS`, `DIYKEY_LOG_MAX_MB`, `DIYKEY_LOG_KEEP` | Logging (`DIYKEY_DEBUG_LOGGERS`: comma list of loggers, e.g. `diykey.lpr`, at debug) |
 | `DIYKEY_IDLE_UNLOAD_MIN` | Unload the VLM (~1.4 GB) and face enhance (~0.9 GB) after this many minutes unused; they reload in seconds on the next request, and an incoming event starts the VLM reload early. Off when unset. RAM++ and CLIP stay loaded (reloads of 1.5-6 min and up to 30 s) |
 

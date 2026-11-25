@@ -58,6 +58,7 @@ import lpr  # noqa: E402
 import face_enhance  # noqa: E402
 import vlm_describe  # noqa: E402
 import scene_memory  # noqa: E402
+import pg_access  # noqa: E402
 from ucp4_wire import (  # noqa: E402,F401 -- re-exported for callers and tests
     RECORD_FORMAT_JSON, RECORD_FORMAT_RAW, RECORD_TYPE_BODY, RECORD_TYPE_HEAD,
     pack_message, pack_record, unpack_all_records)
@@ -231,38 +232,12 @@ def _simulate_update(ws, target, body, mac_nosep):
     _request_restart(f"firmware update to {target}", ws)
 
 
-def _psql_path():
-    """psql from DIYKEY_PG_BIN, else PATH, else Homebrew's postgresql@17 (macOS service)."""
-    pg_bin = os.environ.get("DIYKEY_PG_BIN")
-    if pg_bin:
-        return os.path.join(pg_bin, "psql")
-    return shutil.which("psql") or "/opt/homebrew/opt/postgresql@17/bin/psql"
-
-
 def _pg_password_plan(new_password):
     """(argv, stdin) that gives role ``unifi-protect`` the password Protect rotated to, or
-    (None, reason) when this host has no reachable PostgreSQL.
-
-    macOS service: DIYKEY_PG_SOCKET=<instance>/pg, psql runs as the login user.
-    Linux system PostgreSQL: none needed -- as root psql runs as the postgres OS user over
-    /var/run/postgresql, so peer auth lets it ALTER ROLE. DIYKEY_PG_USER overrides the OS
-    user (any user that can authenticate as a superuser works).
-    """
-    sock = os.environ.get("DIYKEY_PG_SOCKET")
-    user = os.environ.get("DIYKEY_PG_USER")
-    if sys.platform != "darwin" and not sock and os.geteuid() == 0:
-        sock = "/var/run/postgresql"
-        user = user or "postgres"
-    if not sock and not user:
-        return None, "no DIYKEY_PG_SOCKET/DIYKEY_PG_USER"
-    cmd = [_psql_path(), "-d", "postgres", "-q", "-v", "ON_ERROR_STOP=1"]
-    if sock:
-        cmd += ["-h", sock]
-    runuser = shutil.which("runuser")
-    if user and os.geteuid() == 0 and user != "root" and runuser:
-        cmd = [runuser, "-u", user, "--"] + cmd
-    elif user and user != "root":
-        cmd += ["-U", user]
+    (None, reason) when this host has no reachable PostgreSQL (see pg_access.psql_cmd)."""
+    cmd, reason = pg_access.psql_cmd()
+    if cmd is None:
+        return None, reason
     # The password never goes in argv (it would show in ps): quoted as a SQL literal instead,
     # doubling embedded quotes, with backslash escapes off so it is stored verbatim.
     literal = "'" + new_password.replace("'", "''") + "'"
@@ -2624,6 +2599,9 @@ def main():
         if token is not None and not send_token:
             log.info("token already used on a prior connection -- reconnecting tokenless "
                      "(fingerprint should already be pinned)")
+        # Protect opens our PostgreSQL right after the socket is up: admit this console first
+        # (a moved or re-adopting console is otherwise refused) and check the setup.
+        pg_access.ensure_console(host, bind_ip=device_info["ip"])
         _reset_pending.clear()
         connected = threading.Event()
         try:

@@ -20,6 +20,7 @@ for p in (_ROOT, os.path.join(_ROOT, "stage3_wss")):
         sys.path.insert(0, p)
 
 import ucp4_client  # noqa: E402
+import pg_access  # noqa: E402
 from core import config  # noqa: E402
 
 # The service environment must not leak into tests; each test sets what it needs.
@@ -681,9 +682,9 @@ class TestPgPasswordPlan(unittest.TestCase):
         clean = {k: v for k, v in os.environ.items() if not k.startswith("DIYKEY_PG")}
         clean.update(env)
         with mock.patch.dict(os.environ, clean, clear=True), \
-                mock.patch.object(ucp4_client.sys, "platform", platform), \
-                mock.patch.object(ucp4_client.os, "geteuid", return_value=euid), \
-                mock.patch.object(ucp4_client.shutil, "which", side_effect=which):
+                mock.patch.object(pg_access.sys, "platform", platform), \
+                mock.patch.object(pg_access.os, "geteuid", return_value=euid), \
+                mock.patch.object(pg_access.shutil, "which", side_effect=which):
             return ucp4_client._pg_password_plan("s3cret")
 
     def test_macos_instance_socket(self):
@@ -708,7 +709,7 @@ class TestPgPasswordPlan(unittest.TestCase):
 
     def test_embedded_quote_is_doubled(self):
         with mock.patch.dict(os.environ, {"DIYKEY_PG_SOCKET": "/tmp/pg"}, clear=False), \
-                mock.patch.object(ucp4_client.sys, "platform", "darwin"):
+                mock.patch.object(pg_access.sys, "platform", "darwin"):
             _, sql = ucp4_client._pg_password_plan("a'b")
         self.assertIn("PASSWORD 'a''b'", sql)
 

@@ -55,6 +55,8 @@ sudo -u postgres psql -c "ALTER ROLE \"unifi-protect\" PASSWORD 'unifi-protect';
 # /etc/postgresql/<major>/main/postgresql.conf: listen_addresses = '*'
 # /etc/postgresql/<major>/main/pg_hba.conf:
 #   hostssl unifi-protect unifi-protect <console-ip>/32 scram-sha-256
+#   (as root, DIY-Key keeps a rule like this pointed at the adopted console on each ucp4
+#   connect, and reloads; DIYKEY_PG_HBA_SYNC=0 leaves the file alone)
 sudo systemctl restart postgresql
 ```
 

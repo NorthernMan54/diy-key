@@ -143,14 +143,16 @@ while true; do
         continue
     fi
     ensure_pg
-    # changeUserPassword applies Protect's rotated password to this cluster's role.
-    # psql connects as the cluster's owner: under the daemon there's no "root" role.
+    # changeUserPassword applies Protect's rotated password to this cluster's role, and each
+    # ucp4 connect admits that console in pg_hba.conf and checks Protect gets in (pg_access.py;
+    # it quotes refusals from the log). psql connects as the cluster's owner: under the daemon
+    # there's no "root" role.
     if pg_wanted; then
-        export DIYKEY_PG_SOCKET=$PG_DIR
+        export DIYKEY_PG_SOCKET=$PG_DIR DIYKEY_PG_LOG=$PG_LOG
         DIYKEY_PG_USER=$(stat -f %Su "$PG_DIR")
         export DIYKEY_PG_USER
     else
-        unset DIYKEY_PG_SOCKET DIYKEY_PG_USER
+        unset DIYKEY_PG_SOCKET DIYKEY_PG_USER DIYKEY_PG_LOG
     fi
     stop_stale
     if [ "$(id -u)" -eq 0 ] && [ -n "${SUDO_USER:-}" ]; then

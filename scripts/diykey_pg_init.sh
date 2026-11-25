@@ -31,6 +31,8 @@ unix_socket_directories = '$PG_DIR'
 ssl = on
 password_encryption = scram-sha-256
 EOF
+# pg_access.py rewrites the line after this marker on each ucp4 connect, for the console being
+# connected to: keep the marker text in sync with pg_access.MARKER.
 cat >> "$PG_DIR/pg_hba.conf" <<EOF
 
 # DIY-Key: only the Protect console, only over SSL.
